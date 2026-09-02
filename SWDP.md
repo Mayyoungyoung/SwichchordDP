@@ -217,4 +217,6 @@ ChordEdit 附录 D/E 的定理把状态空间从图像潜在换成动作块后**
 ## 10. 调研与修订记录
 
 - 完整调研报告见 [docs/survey.md](docs/survey.md)(2026-09-02):25 篇文献、逐节对照、novelty 增量定位、撞车分析。
+- 概念验证实验结论(2026-09-02)见 [docs/experiment_report.md](docs/experiment_report.md):
+  Chord 场 vs 硬切换成功率 3×、场能量 3×↓;可行性投影为最强独立贡献(LIBERO 拼接 MSE -36%)。
 - v2 修订要点:Chord 场公式权重按原文修正(`û = [t·R(t−δ) + δ·R(t)]/(t+δ)`)、τ→λ 符号分离、B_t 动作空间闭式系数补全、新增定理重排(投影稳定性为头号)、验证方案落地为「Meta-World 主 + LIBERO 增信」、风险清单更新(时间步平移质疑/GSC-SCaR 撞车)。

@@ -31,7 +31,7 @@ def summarize(scene="pick-place-v3", tag_filter=""):
             e2e = np.mean([e["e2e"] for e in eps])
             energy = np.mean([e["energy"] for e in eps])
             nfe = np.mean([e["nfe"] for e in eps])
-            oos = np.mean([e["oos"] for e in eps])
+            oos = np.mean([e.get("oos", 0.0) for e in eps])
             lips = {}
             for e in eps:
                 for l in e.get("lips", []):
