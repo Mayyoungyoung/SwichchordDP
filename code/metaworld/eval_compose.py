@@ -19,11 +19,13 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swdp.policy import SkillDP  # noqa: E402
+from swdp.distil import ConsistencyStudent  # noqa: E402
 from swdp import chord_compose as cc  # noqa: E402
 from swdp.feasibility import prox_feasible  # noqa: E402
 from skills import make_env, SKILLS  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+X0_SPACE = False
 
 # ---------------- 场景任务定义 ----------------
 # 每项: (技能序列, 各技能执行步数, seen/unseen)
@@ -77,15 +79,18 @@ def skill_success(scene, name, env, obs, info):
 
 
 def est_lipschitz(dp, a, obs, s, n_pert=16, eps=1e-2):
-    """有限差分估计 ‖∂eps_hat/∂a‖(谱范数近似, 用最大方向差分比)。"""
+    """有限差分估计 ‖∂模型输出/∂a‖(谱范数近似, 用最大方向差分比)。"""
     B, H, D = a.shape
     max_ratio = 0.0
+    q = (lambda x: dp.f(x, torch.full((B, 1), 0.9, device=DEVICE), obs, s)) \
+        if X0_SPACE else \
+        (lambda x: dp.Q(x, torch.full((B, 1), 0.9, device=DEVICE), obs, s))
     for _ in range(n_pert):
         delta = torch.randn_like(a)
         delta = delta / (delta.norm(dim=(1, 2), keepdim=True) + 1e-8)
         a2 = a + eps * delta
-        e1 = dp.Q(a, torch.full((B, 1), 0.9, device=DEVICE), obs, s)
-        e2 = dp.Q(a2, torch.full((B, 1), 0.9, device=DEVICE), obs, s)
+        e1 = q(a)
+        e2 = q(a2)
         ratio = ((e2 - e1).norm(dim=(1, 2)) / (eps * delta.norm(dim=(1, 2)) + 1e-12))
         max_ratio = max(max_ratio, float(ratio.max()))
     return max_ratio
@@ -161,7 +166,7 @@ def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
             mask = cc.temporal_mask(anchor.shape[1], 0, mask_width, DEVICE) if use_mask else None
             a_new, info_t = cc.switch(dp, o_t, anchor, s_from, s_to, tau, delta,
                                       lam, n_noise, mode, mask, use_proj,
-                                      seed=seed + t)
+                                      seed=seed + t, x0_space=X0_SPACE)
             nfe += (2 if mode in ("chord",) else 1) * n_noise
             # 记录传输场能量
             energies.append(info_t["energy"])
@@ -228,10 +233,21 @@ def main():
     ap.add_argument("--use_mask", action="store_true", default=False)
     ap.add_argument("--use_proj", action="store_true", default=False)
     ap.add_argument("--n_ddim", type=int, default=24)
+    ap.add_argument("--cd", action="store_true",
+                    help="使用一致性蒸馏学生模型(x0 空间残差场, B_t≡I)")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
-    dp = SkillDP.load(os.path.join(MODEL_DIR, f"dp_{args.scene}.pt"), DEVICE)
+    global X0_SPACE
+    if args.cd:
+        ckpt = torch.load(os.path.join(MODEL_DIR, f"dp_{args.scene}_cd.pt"),
+                          map_location=DEVICE)
+        dp = ConsistencyStudent(**ckpt["cfg"], device=DEVICE)
+        dp.load_state_dict(ckpt["model"])
+        X0_SPACE = True
+    else:
+        dp = SkillDP.load(os.path.join(MODEL_DIR, f"dp_{args.scene}.pt"), DEVICE)
+        X0_SPACE = False
     dp.eval()
     tasks = TASKS[args.scene]
     results = []

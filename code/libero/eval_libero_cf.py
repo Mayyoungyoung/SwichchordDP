@@ -51,7 +51,7 @@ def main():
     ap.add_argument("--keep_frac", type=float, default=0.5,
                     help="截断比例: 保留前 keep_frac 的技能")
     ap.add_argument("--lam", type=float, default=0.3)
-    ap.add_argument("--n_ddim", type=int, default=8)
+    ap.add_argument("--n_ddim", type=int, default=16)
     args = ap.parse_args()
 
     with open(os.path.join(DATA_DIR, "plans.json")) as f:

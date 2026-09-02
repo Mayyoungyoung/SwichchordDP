@@ -71,7 +71,7 @@ def replay_task(ts, task_id, n_demos, out_dir, seed_base=0):
     task = ts.get_task(task_id)
     demo_path = os.path.join(get_libero_path("datasets"),
                              ts.get_task_demonstration(task_id))
-    obs_list, act_list, skill_list, plan = [], [], [], []
+    obs_list, act_list, skill_list, plan, init_list = [], [], [], [], []
     with h5py.File(demo_path, "r") as h:
         demo_keys = sorted(h["data"].keys(),
                            key=lambda k: int(k.split("_")[1]))
@@ -83,6 +83,7 @@ def replay_task(ts, task_id, n_demos, out_dir, seed_base=0):
             env.seed(seed_base + d)
             env.reset()
             obs = env.set_init_state(st0)
+            init_list.append(st0)
             o_seq, a_seq = [], []
             for a in acts:
                 o_seq.append(env_obs(obs))
@@ -114,6 +115,7 @@ def replay_task(ts, task_id, n_demos, out_dir, seed_base=0):
         f.create_dataset("obs", data=obs)
         f.create_dataset("action", data=act)
         f.create_dataset("skill", data=skill)
+        f.create_dataset("init_states", data=np.stack(init_list))
         f.create_dataset("obs_mean", data=obs.mean(0))
         f.create_dataset("obs_std", data=obs.std(0) + 1e-6)
         f.create_dataset("act_mean", data=act.mean(0))

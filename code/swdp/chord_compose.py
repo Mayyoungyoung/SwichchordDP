@@ -19,6 +19,39 @@ from .feasibility import prox_feasible
 
 
 @torch.no_grad()
+def residual_field_x0(dp, a_anchor, tau, obs, s_from, s_to, n_noise=1,
+                      rng=None, weights=None):
+    """x0 空间残差场(一致性模型): R = E_z[ F(z,tau,c') - F(z,tau,c) ], B_t ≡ I。
+
+    对 CM 类模型, F(z, tau) 直接输出干净动作块, 条件差即动作空间编辑方向,
+    无需 B_t 映射(等效于 ChordEdit 的速度参数化情形)。
+    """
+    B = a_anchor.shape[0]
+    device = a_anchor.device
+    gen = torch.Generator(device=device)
+    if rng is not None:
+        gen.manual_seed(int(rng))
+    alpha = ALPHA(torch.as_tensor(tau, device=device))
+    sigma = SIGMA(torch.as_tensor(tau, device=device))
+    acc = torch.zeros_like(a_anchor)
+    for _ in range(n_noise):
+        eps = torch.randn(a_anchor.shape, device=device, generator=gen)
+        z = alpha * a_anchor + sigma * eps
+
+        def fz(s):
+            if s is None:
+                return torch.zeros_like(a_anchor)
+            return dp.f(z, torch.full((B, 1), tau, device=device), obs, s)
+
+        if weights is not None:
+            diff = sum(w * fz(s) for w, s in weights)
+        else:
+            diff = fz(s_to) - fz(s_from)
+        acc = acc + diff
+    return acc / n_noise
+
+
+@torch.no_grad()
 def residual_field(dp, a_anchor, tau, obs, s_from, s_to, n_noise=1,
                    rng=None, weights=None):
     """可观测残差场 R(a_anchor, tau) = E_z[ B_tau * (Q(z,s_to) - Q(z,s_from)) ]。
@@ -64,7 +97,7 @@ def residual_field(dp, a_anchor, tau, obs, s_from, s_to, n_noise=1,
 
 @torch.no_grad()
 def chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to, n_noise=1,
-                rng=None, mode="chord", weights=None):
+                rng=None, mode="chord", weights=None, x0_space=False):
     """Chord 控制场 û。
 
     mode:
@@ -73,22 +106,22 @@ def chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to, n_noise=1,
     - "eff_shift": û = R(t−δ)           (有效时间步平移消融)
     - "energy":    GSC 式分数叠加, 直接返回叠加后的噪声(调用方自行去噪)
     """
+    rf = residual_field_x0 if x0_space else residual_field
     if mode == "chord":
-        r_prev = residual_field(dp, a_anchor, tau - delta, obs, s_from, s_to,
-                                n_noise, rng, weights)
-        r_cur = residual_field(dp, a_anchor, tau, obs, s_from, s_to,
-                               n_noise, rng, weights)
+        r_prev = rf(dp, a_anchor, tau - delta, obs, s_from, s_to,
+                    n_noise, rng, weights)
+        r_cur = rf(dp, a_anchor, tau, obs, s_from, s_to,
+                   n_noise, rng, weights)
         w_prev = tau
         w_cur = delta
         u = (w_prev * r_prev + w_cur * r_cur) / (tau + delta)
         return u, dict(r_prev=r_prev, r_cur=r_cur)
     elif mode == "naive":
-        r_cur = residual_field(dp, a_anchor, tau, obs, s_from, s_to,
-                               n_noise, rng, weights)
+        r_cur = rf(dp, a_anchor, tau, obs, s_from, s_to, n_noise, rng, weights)
         return r_cur, dict(r_cur=r_cur)
     elif mode == "eff_shift":
-        r_prev = residual_field(dp, a_anchor, tau - delta, obs, s_from, s_to,
-                                n_noise, rng, weights)
+        r_prev = rf(dp, a_anchor, tau - delta, obs, s_from, s_to,
+                    n_noise, rng, weights)
         return r_prev, dict(r_prev=r_prev)
     elif mode == "energy":
         # GSC 式: 直接对叠加分数做一步 x0 估计更新(等价于乘积专家方向)
@@ -120,14 +153,16 @@ def temporal_mask(horizon: int, boundary: int, width: int, device: str = "cuda")
 
 @torch.no_grad()
 def switch(dp, obs, a_anchor, s_from, s_to, tau=0.9, delta=0.15, lam=1.0,
-           n_noise=1, mode="chord", mask=None, use_proj=False, seed=None):
+           n_noise=1, mode="chord", mask=None, use_proj=False, seed=None,
+           x0_space=False):
     """Switch: 技能切换场(一次单步传输)。
 
     mode="energy"(GSC 式): 对两个技能的分数做乘积专家组合(等权重), 一步 x0 估计更新。
     """
     weights = [(1.0, s_from), (1.0, s_to)] if mode == "energy" else None
     u, info = chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to,
-                          n_noise, seed, mode, weights=weights)
+                          n_noise, seed, mode, weights=weights,
+                          x0_space=x0_space)
     if mask is None:
         mask = 1.0
     a_new = a_anchor + lam * u * mask

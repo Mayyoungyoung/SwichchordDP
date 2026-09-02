@@ -66,7 +66,7 @@ def est_lipschitz(dp, a, obs_t, s, n_pert=6, eps=1e-2):
 @torch.no_grad()
 def rollout(dp, task, plan, init_state, norm, mode, tau=0.9, delta=0.15,
             lam=0.3, n_noise=1, use_mask=True, use_proj=True, mask_width=4,
-            n_ddim=8, resample=5, seed=0, max_steps=400):
+            n_ddim=16, resample=5, seed=0, max_steps=400):
     obs_mean, obs_std, act_mean, act_std = norm
     env = get_env(task)
     env.seed(1000 + seed)
@@ -144,7 +144,7 @@ def main():
     ap.add_argument("--n_episodes", type=int, default=5)
     ap.add_argument("--n_tasks", type=int, default=10)
     ap.add_argument("--lam", type=float, default=0.3)
-    ap.add_argument("--n_ddim", type=int, default=8)
+    ap.add_argument("--n_ddim", type=int, default=16)
     ap.add_argument("--use_mask", action="store_true", default=True)
     ap.add_argument("--use_proj", action="store_true", default=True)
     ap.add_argument("--out", default="")
@@ -164,7 +164,7 @@ def main():
         with h5py.File(os.path.join(DATA_DIR, f"{task.name}.h5"), "r") as f:
             norm = (f["obs_mean"][:], f["obs_std"][:],
                     f["act_mean"][:], f["act_std"][:])
-        init_states = ts.get_task_init_states(i)
+            init_states = f["init_states"][:]
         succ = []
         for ep in range(args.n_episodes):
             t0 = time.time()
