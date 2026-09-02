@@ -42,9 +42,12 @@ class SkillDP(nn.Module):
 
     # ---------- 训练 ----------
     def loss(self, a0: torch.Tensor, obs: torch.Tensor, s: torch.Tensor,
-             rng: torch.Generator | None = None):
+             rng: torch.Generator | None = None, tau_power: float = 1.0):
         B = a0.shape[0]
         tau = torch.rand(B, 1, device=a0.device, generator=rng)
+        if tau_power != 1.0:
+            # 低噪声偏置: tau = 1 - u^power, 密度向 tau=1(低噪声)集中
+            tau = 1.0 - tau ** tau_power
         eps = torch.randn(a0.shape, device=a0.device, generator=rng)
         alpha = ALPHA(tau).unsqueeze(-1)
         sigma = SIGMA(tau).unsqueeze(-1)
