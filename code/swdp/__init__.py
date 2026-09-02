@@ -7,4 +7,4 @@
 - feasibility: 物理可行性投影
 - distil: 一致性蒸馏(1/2/4 步策略)
 """
-from . import nets, policy, chord_compose, feasibility, distil  # noqa: F401
+from . import nets, policy, chord_compose, feasibility, distil, planner  # noqa: F401

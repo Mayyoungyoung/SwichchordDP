@@ -260,3 +260,19 @@
 23. Dhakan et al. Concurrent Skill Composition using Ensemble of Primitive Skills. IEEE TCDS 2022
 24. Papadakis et al. Optimal Transport with Proximal Splitting. SIAM J. Imaging Sci. 2014
 25. Ajay et al. Compositional Foundation Models for Hierarchical Planning (DiP). NeurIPS 2023
+
+---
+
+## 6. 补充调研(2026-09-03):工具对齐与长程 VLA 两篇
+
+> 详见 [docs/design_optimization.md](design_optimization.md) 的完整提炼与 SWDP.md v3 对照。
+
+26. Lei et al. *Towards Long-horizon Embodied Agents with Tool-Aligned Vision-Language-Action Models (TAPT / VLAs-as-Tools).* arXiv:2605.13119
+    - 高层 VLM 智能体 + 专用 VLA 工具家族;双向接口(调用 c=(g,z) / 进度反馈);
+      TAPT = 调用对齐训练单元 + 工具家族残差适配器(参数 +9%);
+      LIBERO-Long 97.2 / RoboTwin 62.5 / CF-Long 调用忠实度(Faithful/Non-biased Rate)。
+    - 与 Idea 9:本文 = 冻结执行器上的**免训**工具交接(对照其训练式对齐),分水岭实验见 SWDP.md §7。
+27. Zeng et al. *HELM: Harness-Enhanced Long-horizon Memory for Vision-Language-Action Manipulation.* arXiv:2604.18791
+    - 反应式 VLA 三缺陷(记忆/验证/恢复)→ 情景记忆 EMM(CLIP 键值) + 学习验证器 + 恢复控制器;
+      LIBERO-Long +23.1、扰动恢复 54.2%。
+    - 与 Idea 9:本文的可行性投影 = 免训执行前验证,场能量 = 免训恢复触发信号(对标其验证/恢复环)。
