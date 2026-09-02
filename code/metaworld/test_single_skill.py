@@ -15,7 +15,7 @@ with h5py.File(os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../r
 skill_ids = {"reach": 0, "grasp": 1, "lift": 2, "carry": 3, "place": 4}
 scene = "pick-place-v3"
 
-for name, n in [("reach", 30), ("grasp", 25), ("lift", 25), ("carry", 30), ("place", 20)]:
+for name, n in [("reach", 30), ("grasp", 30), ("lift", 25), ("carry", 30), ("place", 25)]:
     succ = []
     for ep in range(8):
         env = make_env(scene, seed=700 + ep)
@@ -25,13 +25,13 @@ for name, n in [("reach", 30), ("grasp", 25), ("lift", 25), ("carry", 30), ("pla
                "place": ["reach", "grasp", "lift", "carry"]}[name]
         for p in pre:
             c = SKILLS[scene][p](env)
-            for _ in range(30 if p == "reach" else 25):
+            for _ in range(30 if p in ("reach", "grasp") else 25):
                 obs, *_ = env.step(c.act(obs))
         s = torch.zeros(1, 5, device=DEVICE)
         s[0, skill_ids[name]] = 1
 
         def sample(o):
-            return dp.sample(torch.from_numpy((o - obs_mean) / obs_std).float().to(DEVICE).unsqueeze(0), s, n_steps=16)
+            return dp.sample(torch.from_numpy((o - obs_mean) / obs_std).float().to(DEVICE).unsqueeze(0), s, n_steps=24)
 
         chunk = sample(obs)
         step = 0

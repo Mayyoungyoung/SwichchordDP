@@ -32,7 +32,7 @@ def residual_field(dp, a_anchor, tau, obs, s_from, s_to, n_noise=1,
     device = a_anchor.device
     gen = torch.Generator(device=device)
     if rng is not None:
-        gen.manual_seed(rng)
+        gen.manual_seed(int(rng))
     alpha = ALPHA(torch.as_tensor(tau, device=device))
     sigma = SIGMA(torch.as_tensor(tau, device=device))
     Bt = b_t_epsilon(torch.as_tensor(tau, device=device))
@@ -96,7 +96,7 @@ def chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to, n_noise=1,
         device = a_anchor.device
         gen = torch.Generator(device=device)
         if rng is not None:
-            gen.manual_seed(rng)
+            gen.manual_seed(int(rng))
         eps = torch.randn(a_anchor.shape, device=device, generator=gen)
         z = ALPHA(torch.as_tensor(tau, device=device)) * a_anchor + \
             SIGMA(torch.as_tensor(tau, device=device)) * eps
@@ -121,9 +121,13 @@ def temporal_mask(horizon: int, boundary: int, width: int, device: str = "cuda")
 @torch.no_grad()
 def switch(dp, obs, a_anchor, s_from, s_to, tau=0.9, delta=0.15, lam=1.0,
            n_noise=1, mode="chord", mask=None, use_proj=False, seed=None):
-    """Switch: 技能切换场(一次单步传输)。"""
+    """Switch: 技能切换场(一次单步传输)。
+
+    mode="energy"(GSC 式): 对两个技能的分数做乘积专家组合(等权重), 一步 x0 估计更新。
+    """
+    weights = [(1.0, s_from), (1.0, s_to)] if mode == "energy" else None
     u, info = chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to,
-                          n_noise, seed, mode)
+                          n_noise, seed, mode, weights=weights)
     if mask is None:
         mask = 1.0
     a_new = a_anchor + lam * u * mask

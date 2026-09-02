@@ -19,8 +19,8 @@ def collect_full(scene: str, n_demos: int, out_dir: str, seed0: int = 0):
     for d in range(n_demos):
         env = make_env(scene, seed=seed0 + d)
         obs, _ = env.reset()
-        steps = {"reach": 30, "grasp": 25, "lift": 25, "carry": 30,
-                 "place": 20, "open": 25}
+        steps = {"reach": 30, "grasp": 30, "lift": 25, "carry": 30,
+                 "place": 25, "open": 25}
         ctrls = [SKILLS[scene][n](env) for n in seq]
         for name, ctrl in zip(seq, ctrls):
             for _ in range(steps[name]):

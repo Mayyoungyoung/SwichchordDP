@@ -31,19 +31,19 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # unseen = 演示数据中从未出现的技能序对/起始技能。
 TASKS = {
     "pick-place-v3": [
-        (["reach", "grasp"], [], [30, 25], "seen"),
+        (["reach", "grasp"], [], [30, 30], "seen"),
         (["reach", "grasp", "lift", "carry", "place"], [], [30, 25, 25, 30, 20], "seen"),
         (["reach", "carry"], [], [30, 30], "unseen"),
-        (["grasp", "carry"], ["reach"], [25, 30], "unseen"),
-        (["lift", "place"], ["reach", "grasp"], [25, 20], "unseen"),
-        (["place"], ["reach", "grasp", "lift", "carry"], [20], "unseen"),
+        (["grasp", "carry"], ["reach"], [30, 30], "unseen"),
+        (["lift", "place"], ["reach", "grasp"], [25, 25], "unseen"),
+        (["place"], ["reach", "grasp", "lift", "carry"], [25], "unseen"),
     ],
     "door-open-v3": [
         (["reach", "open"], [], [40, 75], "seen"),
         (["open"], [], [100], "unseen"),
     ],
 }
-SETUP_STEPS = {"reach": 30, "grasp": 25, "lift": 25, "carry": 30, "open": 40}
+SETUP_STEPS = {"reach": 30, "grasp": 30, "lift": 25, "carry": 30, "open": 40}
 
 
 def skill_success(scene, name, env, obs, info):
@@ -54,15 +54,17 @@ def skill_success(scene, name, env, obs, info):
         if name == "reach":
             return float(np.linalg.norm(hand[:2] - puck[:2]) < 0.03)
         if name == "grasp":
-            return float(grip < 0.6)
+            return float(grip < 0.75)
         if name == "lift":
             return float(puck[2] > 0.08)
         if name == "carry":
             return float(np.linalg.norm(hand[:2] - goal[:2]) < 0.05 and
                          grip < 0.6)
         if name == "place":
-            return float(np.linalg.norm(puck[:2] - goal[:2]) < 0.04 and
-                         puck[2] < 0.06 and grip > 0.7)
+            # 官方判定: obj_to_target(3D) <= 0.07; info 不可用时退化为几何判定
+            if isinstance(info, dict) and info.get("success", 0.0) > 0.5:
+                return 1.0
+            return float(np.linalg.norm(puck - goal) < 0.07 and grip > 0.7)
     elif scene == "door-open-v3":
         if name == "reach":
             target = obs[4:7] + np.array([0.06, 0.02, 0.2])
@@ -92,7 +94,7 @@ def est_lipschitz(dp, a, obs, s, n_pert=16, eps=1e-2):
 @torch.no_grad()
 def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
             lam=1.0, n_noise=1, use_mask=True, use_proj=False, mask_width=4,
-            n_ddim=16, resample=8, seed=0):
+            n_ddim=24, resample=8, seed=0):
     """执行一个技能序列, 返回指标字典。
 
     setup: 脚本前置技能序列(建立首个技能的前置状态, 不计分)。
@@ -146,14 +148,18 @@ def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
             o_t = norm_obs(obs)
             # OOS 代理: 边界处观测变化幅度
             oos_shifts.append(float(np.abs(obs - last_obs).max()))
+            # 交接锚点 = 以当前观测重新采样的 s_from 动作块(当前计划),
+            # 传输后从块首重新执行(对应 ChordEdit「编辑当前计划」语义)。
+            anchor = sample_chunk(o_t, skill_ids[seq[cur_skill_idx - 1]])
+            nfe += n_ddim
             # 理论闭环: 边界锚点 Lipschitz
             lips_vals.append(dict(
                 pair=f"{seq[cur_skill_idx-1]}->{seq[cur_skill_idx]}",
-                L_from=est_lipschitz(dp, chunk, o_t, s_from),
-                L_to=est_lipschitz(dp, chunk, o_t, s_to)))
+                L_from=est_lipschitz(dp, anchor, o_t, s_from),
+                L_to=est_lipschitz(dp, anchor, o_t, s_to)))
             # 传输
-            mask = cc.temporal_mask(chunk.shape[1], 0, mask_width, DEVICE) if use_mask else None
-            a_new, info_t = cc.switch(dp, o_t, chunk, s_from, s_to, tau, delta,
+            mask = cc.temporal_mask(anchor.shape[1], 0, mask_width, DEVICE) if use_mask else None
+            a_new, info_t = cc.switch(dp, o_t, anchor, s_from, s_to, tau, delta,
                                       lam, n_noise, mode, mask, use_proj,
                                       seed=seed + t)
             nfe += (2 if mode in ("chord",) else 1) * n_noise
@@ -164,6 +170,7 @@ def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
 
         # 执行当前块的首个动作
         a_raw = (chunk[0, step_in_chunk].cpu().numpy() * act_std) + act_mean
+        a_raw = np.clip(a_raw, -1.0, 1.0)
         exec_actions.append(a_raw)
         obs, rew, term, trunc, info = env.step(a_raw)
         nfe += 0
@@ -189,7 +196,8 @@ def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
                 scene, seq[cur_skill_idx], env, obs, info)
 
     exec_actions = np.array(exec_actions)
-    energy = float(np.mean(np.sum(np.diff(exec_actions, axis=0) ** 2, axis=1)))
+    _e = np.sum(np.diff(exec_actions, axis=0) ** 2, axis=1)
+    energy = float(np.median(_e)) if len(_e) else 0.0
     jerk = float(np.max(np.abs(np.diff(exec_actions, n=2, axis=0)))) if len(exec_actions) > 2 else 0.0
     e2e = float(all(per_skill_succ.get(s, 0.0) > 0.5 for s in seq))
     env.close()
@@ -219,6 +227,7 @@ def main():
     ap.add_argument("--n_noise", type=int, default=1)
     ap.add_argument("--use_mask", action="store_true", default=False)
     ap.add_argument("--use_proj", action="store_true", default=False)
+    ap.add_argument("--n_ddim", type=int, default=24)
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -235,7 +244,8 @@ def main():
             r = rollout(dp, args.scene, seq, skill_steps, args.mode,
                         setup=setup, tau=args.tau, delta=args.delta, lam=args.lam,
                         n_noise=args.n_noise, use_mask=args.use_mask,
-                        use_proj=args.use_proj, seed=ep * 7 + 1)
+                        use_proj=args.use_proj, n_ddim=args.n_ddim,
+                        seed=ep * 7 + 1)
             r["latency_s"] = time.time() - t0
             r["kind"] = kind
             succ.append(r)

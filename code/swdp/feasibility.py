@@ -19,15 +19,14 @@ def action_clip(a: torch.Tensor):
 
 
 def velocity_clip(a: torch.Tensor, max_step: float = 0.12):
-    """动作块内相邻步速度限幅: |a[t+1] - a[t]| <= max_step(位置维)。"""
+    """动作块内相邻步速度限幅: |a[t+1] - a[t]| <= max_step(除最后一维夹爪)。"""
     out = a.clone()
     if a.shape[1] < 2:
         return out
-    pos = out[..., :3]
-    grip = out[..., 3:4]
+    pos = out[..., :-1]
+    grip = out[..., -1:]
     diff = pos[:, 1:] - pos[:, :-1]
     diff = torch.clamp(diff, -max_step, max_step)
-    # 累加重建
     for t in range(1, pos.shape[1]):
         pos[:, t] = pos[:, t - 1] + diff[:, t - 1]
     out = torch.cat([pos, grip], dim=-1)
@@ -38,14 +37,13 @@ def smooth(a: torch.Tensor, k: int = 3):
     """滑动平均平滑(卷积核非负且和为 1 -> 非扩张)。"""
     if k <= 1 or a.shape[1] < k:
         return a
-    kernel = torch.ones(k, device=a.device) / k
     pad = k // 2
+    ap = torch.nn.functional.pad(a, (0, 0, pad, pad), mode="replicate")
+    c = a.shape[-1]
+    kernel = torch.ones(c, 1, k, device=a.device) / k
     out = torch.nn.functional.conv1d(
-        a.transpose(1, 2), kernel.view(1, 1, -1), padding=pad
+        ap.transpose(1, 2), kernel, groups=c
     ).transpose(1, 2)
-    # 边界修复: 直接裁剪边界
-    out[:, :pad] = a[:, :pad]
-    out[:, -pad:] = a[:, -pad:]
     return out
 
 

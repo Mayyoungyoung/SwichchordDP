@@ -22,16 +22,24 @@ class ConsistencyStudent(SkillDP):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def _f_impl(self, a, tau, obs, s):
+        eps_hat = self.net(a, tau, obs, s)
+        al = ALPHA(tau).unsqueeze(-1)
+        sg = SIGMA(tau).unsqueeze(-1)
+        x0 = (a - sg * eps_hat) / al.clamp(min=1e-3)
+        if (tau >= 0.999).any():
+            x0 = torch.where(tau.unsqueeze(-1) >= 0.999, a, x0)
+        return x0
+
+    def f_train(self, a, tau, obs, s):
+        """训练用(保留梯度)。"""
+        return self._f_impl(a, tau, obs, s)
+
     @torch.no_grad()
     def f(self, a: torch.Tensor, tau: torch.Tensor, obs: torch.Tensor,
           s: torch.Tensor):
-        """一致性函数: 任意噪声水平 -> 干净动作块。"""
-        eps_hat = self.net(a, tau, obs, s)
-        x0 = (a - SIGMA(tau) * eps_hat) / ALPHA(tau).clamp(min=1e-3)
-        # tau=1 边界条件: 干净输入直接输出自身
-        if (tau >= 0.999).any():
-            x0 = torch.where(tau >= 0.999, a, x0)
-        return x0
+        """一致性函数(推理, 无梯度)。"""
+        return self._f_impl(a, tau, obs, s)
 
     @torch.no_grad()
     def sample(self, obs: torch.Tensor, s: torch.Tensor, n_steps: int = 1,
@@ -95,7 +103,7 @@ def distill(teacher: SkillDP, n_iter: int = 20000, batch: int = 256,
                 x0_est = (a_hi - SIGMA(t_hi) * eps_hat) / ALPHA(t_hi).clamp(min=1e-3)
                 a_lo = ALPHA(t_lo) * x0_est + SIGMA(t_lo) * eps_hat
                 target = ema.f(a_lo, t_lo.expand(B, 1), obs, s)
-            out = student.f(a_hi, t_hi.expand(B, 1), obs, s)
+            out = student.f_train(a_hi, t_hi.expand(B, 1), obs, s)
             loss = nn.functional.mse_loss(out, target.detach())
             opt.zero_grad()
             loss.backward()

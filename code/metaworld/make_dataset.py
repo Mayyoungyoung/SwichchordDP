@@ -15,10 +15,10 @@ from skills import make_env, SKILLS
 SCENES = {
     "pick-place-v3": {
         "reach": (["reach"], [0], 30),
-        "grasp": (["reach"], [30], 25),
-        "lift": (["reach", "grasp"], [30, 25], 25),
-        "carry": (["reach", "grasp", "lift"], [30, 25, 25], 30),
-        "place": (["reach", "grasp", "lift", "carry"], [30, 25, 25, 30], 20),
+        "grasp": (["reach"], [30], 30),
+        "lift": (["reach", "grasp"], [30, 30], 25),
+        "carry": (["reach", "grasp", "lift"], [30, 30, 25], 30),
+        "place": (["reach", "grasp", "lift", "carry"], [30, 30, 25, 30], 25),
     },
     "door-open-v3": {
         "reach": (["reach"], [0], 22),

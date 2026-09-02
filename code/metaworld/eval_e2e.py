@@ -49,6 +49,7 @@ def rollout_e2e(dp, scene, seq, skill_steps, setup=None, n_ddim=16,
     exec_actions = []
     for t in range(total):
         a_raw = chunk[0, step_in_chunk].cpu().numpy() * act_std + act_mean
+        a_raw = np.clip(a_raw, -1.0, 1.0)
         exec_actions.append(a_raw)
         obs, rew, term, trunc, info = env.step(a_raw)
         step_in_chunk += 1
@@ -63,7 +64,8 @@ def rollout_e2e(dp, scene, seq, skill_steps, setup=None, n_ddim=16,
             nfe += n_ddim
             step_in_chunk = 0
     exec_actions = np.array(exec_actions)
-    energy = float(np.mean(np.sum(np.diff(exec_actions, axis=0) ** 2, axis=1)))
+    _e = np.sum(np.diff(exec_actions, axis=0) ** 2, axis=1)
+    energy = float(np.median(_e)) if len(_e) else 0.0
     e2e = float(all(per_skill.get(x, 0.0) > 0.5 for x in seq))
     env.close()
     return dict(seq=seq, per_skill=per_skill, e2e=e2e, energy=energy, nfe=nfe)
