@@ -50,8 +50,8 @@ class ConsistencyStudent(SkillDP):
             t_next = ts[i + 1]
             if i == n_steps - 1:
                 return x0
-            z = ALPHA(t_next) * x0 + SIGMA(t_next) * torch.randn_like(
-                x0, generator=gen)
+            z = ALPHA(t_next) * x0 + SIGMA(t_next) * torch.randn(
+                x0.shape, device=x0.device, generator=gen)
         return x0
 
 
@@ -87,7 +87,7 @@ def distill(teacher: SkillDP, n_iter: int = 20000, batch: int = 256,
             t_lo = levels[idx]
             B = a0.shape[0]
             # 上水平加噪
-            eps = torch.randn_like(a0)
+            eps = torch.randn(a0.shape, device=a0.device)
             a_hi = ALPHA(t_hi) * a0 + SIGMA(t_hi) * eps
             # 教师一步 DDIM 反传到 t_lo
             with torch.no_grad():

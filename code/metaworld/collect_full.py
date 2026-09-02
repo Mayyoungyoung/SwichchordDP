@@ -8,7 +8,7 @@ import numpy as np
 from skills import make_env, SKILLS
 
 FULL_SEQ = {
-    "pick-place-v3": ["reach", "grasp", "lift", "place"],
+    "pick-place-v3": ["reach", "grasp", "lift", "carry", "place"],
     "door-open-v3": ["reach", "open"],
 }
 
@@ -19,8 +19,8 @@ def collect_full(scene: str, n_demos: int, out_dir: str, seed0: int = 0):
     for d in range(n_demos):
         env = make_env(scene, seed=seed0 + d)
         obs, _ = env.reset()
-        steps = {"reach": 30, "grasp": 25, "lift": 25, "place": 45,
-                 "open": 25}
+        steps = {"reach": 30, "grasp": 25, "lift": 25, "carry": 30,
+                 "place": 20, "open": 25}
         ctrls = [SKILLS[scene][n](env) for n in seq]
         for name, ctrl in zip(seq, ctrls):
             for _ in range(steps[name]):
@@ -51,6 +51,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene", default="pick-place-v3")
     ap.add_argument("--n_demos", type=int, default=40)
-    ap.add_argument("--out_dir", default="results/metaworld/data")
+    ap.add_argument("--out_dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/data"))
     args = ap.parse_args()
     collect_full(args.scene, args.n_demos, args.out_dir)

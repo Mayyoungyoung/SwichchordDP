@@ -17,7 +17,8 @@ SCENES = {
         "reach": (["reach"], [0], 30),
         "grasp": (["reach"], [30], 25),
         "lift": (["reach", "grasp"], [30, 25], 25),
-        "place": (["reach", "grasp", "lift"], [30, 25, 25], 45),
+        "carry": (["reach", "grasp", "lift"], [30, 25, 25], 30),
+        "place": (["reach", "grasp", "lift", "carry"], [30, 25, 25, 30], 20),
     },
     "door-open-v3": {
         "reach": (["reach"], [0], 22),
@@ -82,6 +83,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene", default="pick-place-v3")
     ap.add_argument("--n_demos", type=int, default=30)
-    ap.add_argument("--out_dir", default="results/metaworld/data")
+    ap.add_argument("--out_dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/data"))
     args = ap.parse_args()
     collect(args.scene, args.n_demos, args.out_dir)

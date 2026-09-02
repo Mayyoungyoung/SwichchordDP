@@ -121,22 +121,31 @@ class PPLift(SkillController):
         return o["puck"][2] > 0.08
 
 
-class PPPlace(SkillController):
-    """pick-place: 平移至 goal 上方 -> 下降到目标高度 -> 松开夹爪。"""
+class PPCarry(SkillController):
+    """pick-place: 夹持 puck 平移到 goal 上方(保持高度, 夹爪闭合)。"""
 
     def act(self, obs):
         o = parse_pp(obs)
-        dist_xy = np.linalg.norm(o["hand"][:2] - o["goal"][:2])
-        if dist_xy > 0.03:
-            # 阶段 1: 平移到 goal 上方(保持夹持)
-            grab = 1.0
-            target = o["goal"] + np.array([0.0, 0.0, 0.15])
-        elif o["hand"][2] - o["goal"][2] > 0.06:
-            # 阶段 2: 下降到目标高度(保持夹持)
+        target = o["goal"] + np.array([0.0, 0.0, 0.15])
+        return np.array([*move(o["hand"], target), 1.0], dtype=np.float32)
+
+    def done(self, obs):
+        o = parse_pp(obs)
+        return (np.linalg.norm(o["hand"][:2] - o["goal"][:2]) < 0.03 and
+                o["grip"] < 0.6)
+
+
+class PPPlace(SkillController):
+    """pick-place: 从 goal 上方下降到目标高度 -> 松开夹爪。"""
+
+    def act(self, obs):
+        o = parse_pp(obs)
+        if o["hand"][2] - o["goal"][2] > 0.06:
+            # 阶段 1: 下降到目标高度(保持夹持)
             grab = 1.0
             target = o["goal"] + np.array([0.0, 0.0, 0.03])
         else:
-            # 阶段 3: 松开
+            # 阶段 2: 松开
             grab = -1.0
             target = o["goal"] + np.array([0.0, 0.0, 0.03])
         return np.array([*move(o["hand"], target), grab], dtype=np.float32)
@@ -183,7 +192,8 @@ class DoorOpen(SkillController):
 
 SKILLS = {
     "pick-place-v3": {
-        "reach": PPReach, "grasp": PPGrasp, "lift": PPLift, "place": PPPlace,
+        "reach": PPReach, "grasp": PPGrasp, "lift": PPLift,
+        "carry": PPCarry, "place": PPPlace,
     },
     "door-open-v3": {"reach": DoorReach, "open": DoorOpen},
 }

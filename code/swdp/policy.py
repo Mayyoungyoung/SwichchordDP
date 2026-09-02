@@ -45,7 +45,7 @@ class SkillDP(nn.Module):
              rng: torch.Generator | None = None):
         B = a0.shape[0]
         tau = torch.rand(B, 1, device=a0.device, generator=rng)
-        eps = torch.randn_like(a0, generator=rng)
+        eps = torch.randn(a0.shape, device=a0.device, generator=rng)
         alpha = ALPHA(tau).unsqueeze(-1)
         sigma = SIGMA(tau).unsqueeze(-1)
         a_noisy = alpha * a0 + sigma * eps
@@ -70,7 +70,8 @@ class SkillDP(nn.Module):
         if x0_anchor is None:
             x0_anchor = torch.zeros(B, self.horizon, self.act_dim, device=obs.device)
         a = ALPHA(torch.tensor(tau_start, device=obs.device)) * x0_anchor + \
-            SIGMA(torch.tensor(tau_start, device=obs.device)) * torch.randn_like(x0_anchor, generator=gen)
+            SIGMA(torch.tensor(tau_start, device=obs.device)) * torch.randn(
+                x0_anchor.shape, device=obs.device, generator=gen)
         ts = torch.linspace(tau_start, tau1, n_steps + 1, device=obs.device)
         for i in range(n_steps):
             t_cur = ts[i]

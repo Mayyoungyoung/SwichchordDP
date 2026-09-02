@@ -12,18 +12,24 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swdp.policy import SkillDP  # noqa: E402
-from eval_compose import TASKS, skill_success, SKILL_NAMES  # noqa: E402
-from skills import make_env  # noqa: E402
+from eval_compose import TASKS, skill_success, SKILL_NAMES, SETUP_STEPS  # noqa: E402
+from skills import make_env, SKILLS  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-DATA_DIR = "results/metaworld/data"
-MODEL_DIR = "results/metaworld/models"
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/data")
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/models")
 
 
 @torch.no_grad()
-def rollout_e2e(dp, scene, seq, skill_steps, n_ddim=8, resample=8, seed=0):
+def rollout_e2e(dp, scene, seq, skill_steps, setup=None, n_ddim=16,
+                resample=8, seed=0):
     env = make_env(scene, seed=1000 + seed)
     obs, info = env.reset()
+    if setup:
+        for p in setup:
+            ctrl = SKILLS[scene][p](env)
+            for _ in range(SETUP_STEPS[p]):
+                obs, *_ = env.step(ctrl.act(obs))
     with h5py.File(os.path.join(DATA_DIR, f"{scene}_full.h5"), "r") as f:
         obs_mean = f["obs_mean"][:]; obs_std = f["obs_std"][:]
         act_mean = f["act_mean"][:]; act_std = f["act_std"][:]
@@ -71,7 +77,7 @@ def main():
     dp = SkillDP.load(os.path.join(MODEL_DIR, f"dp_{args.scene}_full.pt"), DEVICE)
     dp.eval()
     results = []
-    for seq, skill_steps, kind in TASKS[args.scene]:
+    for seq, setup, skill_steps, kind in TASKS[args.scene]:
         succ = []
         for ep in range(args.n_episodes):
             t0 = time.time()
@@ -86,8 +92,8 @@ def main():
                                 [x["per_skill"].get(s_, 0.0) for x in succ]))
                                 for s_ in seq},
                             episodes=succ))
-    os.makedirs("results/metaworld/eval", exist_ok=True)
-    with open(f"results/metaworld/eval/{args.scene}_e2e.json", "w") as f:
+    os.makedirs(os.path.join(DATA_DIR, "../eval"), exist_ok=True)
+    with open(os.path.join(DATA_DIR, "../eval", f"{args.scene}_e2e.json"), "w") as f:
         json.dump(dict(args=vars(args), results=results), f, indent=2,
                   default=str)
     print("[e2e] saved")

@@ -39,7 +39,7 @@ def residual_field(dp, a_anchor, tau, obs, s_from, s_to, n_noise=1,
 
     acc = torch.zeros_like(a_anchor)
     for _ in range(n_noise):
-        eps = torch.randn_like(a_anchor, generator=gen)
+        eps = torch.randn(a_anchor.shape, device=device, generator=gen)
         z = alpha * a_anchor + sigma * eps
 
         def qz(s):
@@ -97,7 +97,7 @@ def chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to, n_noise=1,
         gen = torch.Generator(device=device)
         if rng is not None:
             gen.manual_seed(rng)
-        eps = torch.randn_like(a_anchor, generator=gen)
+        eps = torch.randn(a_anchor.shape, device=device, generator=gen)
         z = ALPHA(torch.as_tensor(tau, device=device)) * a_anchor + \
             SIGMA(torch.as_tensor(tau, device=device)) * eps
         q_sum = sum(w * dp.Q(z, torch.full((B, 1), tau, device=device), obs, s)

@@ -27,20 +27,23 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ---------------- 场景任务定义 ----------------
 # 每项: (技能序列, 各技能执行步数, seen/unseen)
+# 每项: (技能序列, 脚本前置序列(建立首个技能的前置状态), 各技能步数, seen/unseen)
+# unseen = 演示数据中从未出现的技能序对/起始技能。
 TASKS = {
     "pick-place-v3": [
-        (["reach", "grasp"], [30, 25], "seen"),
-        (["reach", "grasp", "lift"], [30, 25, 25], "seen"),
-        (["reach", "grasp", "lift", "place"], [30, 25, 25, 45], "seen"),
-        (["grasp", "place"], [30, 45], "unseen"),
-        (["lift", "place"], [30, 45], "unseen"),
-        (["reach", "place"], [30, 45], "unseen"),
+        (["reach", "grasp"], [], [30, 25], "seen"),
+        (["reach", "grasp", "lift", "carry", "place"], [], [30, 25, 25, 30, 20], "seen"),
+        (["reach", "carry"], [], [30, 30], "unseen"),
+        (["grasp", "carry"], ["reach"], [25, 30], "unseen"),
+        (["lift", "place"], ["reach", "grasp"], [25, 20], "unseen"),
+        (["place"], ["reach", "grasp", "lift", "carry"], [20], "unseen"),
     ],
     "door-open-v3": [
-        (["reach", "open"], [40, 75], "seen"),
-        (["open"], [100], "unseen"),
+        (["reach", "open"], [], [40, 75], "seen"),
+        (["open"], [], [100], "unseen"),
     ],
 }
+SETUP_STEPS = {"reach": 30, "grasp": 25, "lift": 25, "carry": 30, "open": 40}
 
 
 def skill_success(scene, name, env, obs, info):
@@ -54,6 +57,9 @@ def skill_success(scene, name, env, obs, info):
             return float(grip < 0.6)
         if name == "lift":
             return float(puck[2] > 0.08)
+        if name == "carry":
+            return float(np.linalg.norm(hand[:2] - goal[:2]) < 0.05 and
+                         grip < 0.6)
         if name == "place":
             return float(np.linalg.norm(puck[:2] - goal[:2]) < 0.04 and
                          puck[2] < 0.06 and grip > 0.7)
@@ -84,12 +90,20 @@ def est_lipschitz(dp, a, obs, s, n_pert=16, eps=1e-2):
 
 
 @torch.no_grad()
-def rollout(dp, scene, seq, skill_steps, mode, tau=0.9, delta=0.15, lam=1.0,
-            n_noise=1, use_mask=True, use_proj=False, mask_width=4,
-            n_ddim=8, resample=8, seed=0):
-    """执行一个技能序列, 返回指标字典。"""
+def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
+            lam=1.0, n_noise=1, use_mask=True, use_proj=False, mask_width=4,
+            n_ddim=16, resample=8, seed=0):
+    """执行一个技能序列, 返回指标字典。
+
+    setup: 脚本前置技能序列(建立首个技能的前置状态, 不计分)。
+    """
     env = make_env(scene, seed=1000 + seed)
     obs, info = env.reset()
+    if setup:
+        for p in setup:
+            ctrl = SKILLS[scene][p](env)
+            for _ in range(SETUP_STEPS[p]):
+                obs, *_ = env.step(ctrl.act(obs))
     with h5py.File(os.path.join(DATA_DIR, f"{scene}.h5"), "r") as f:
         obs_mean = f["obs_mean"][:]; obs_std = f["obs_std"][:]
         act_mean = f["act_mean"][:]; act_std = f["act_std"][:]
@@ -186,11 +200,11 @@ def rollout(dp, scene, seq, skill_steps, mode, tau=0.9, delta=0.15, lam=1.0,
 
 
 SKILL_NAMES = {
-    "pick-place-v3": ["reach", "grasp", "lift", "place"],
+    "pick-place-v3": ["reach", "grasp", "lift", "carry", "place"],
     "door-open-v3": ["reach", "open"],
 }
-DATA_DIR = "results/metaworld/data"
-MODEL_DIR = "results/metaworld/models"
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/data")
+MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/models")
 
 
 def main():
@@ -212,14 +226,14 @@ def main():
     dp.eval()
     tasks = TASKS[args.scene]
     results = []
-    for seq, skill_steps, kind in tasks:
+    for seq, setup, skill_steps, kind in tasks:
         if args.mode == "energy" and len(seq) < 2:
             continue
         succ = []
         for ep in range(args.n_episodes):
             t0 = time.time()
             r = rollout(dp, args.scene, seq, skill_steps, args.mode,
-                        tau=args.tau, delta=args.delta, lam=args.lam,
+                        setup=setup, tau=args.tau, delta=args.delta, lam=args.lam,
                         n_noise=args.n_noise, use_mask=args.use_mask,
                         use_proj=args.use_proj, seed=ep * 7 + 1)
             r["latency_s"] = time.time() - t0
@@ -234,13 +248,13 @@ def main():
                 [ep["per_skill"].get(s, 0.0) for ep in succ]))
         results.append(dict(seq=seq, kind=kind, e2e=e2e_rate,
                             per_skill=per_skill_rate, episodes=succ))
-    os.makedirs("results/metaworld/eval", exist_ok=True)
+    os.makedirs(os.path.join(DATA_DIR, "../eval"), exist_ok=True)
     tag = args.out or f"{args.scene}_{args.mode}_t{args.tau}_d{args.delta}_l{args.lam}_n{args.n_noise}"
     if args.use_mask:
         tag += "_mask"
     if args.use_proj:
         tag += "_proj"
-    out_path = f"results/metaworld/eval/{tag}.json"
+    out_path = os.path.join(DATA_DIR, "../eval", f"{tag}.json")
     with open(out_path, "w") as f:
         json.dump(dict(args=vars(args), results=results), f, indent=2,
                   default=str)

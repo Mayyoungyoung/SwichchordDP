@@ -40,8 +40,8 @@ class DemoLoader:
             if len(idx) < 8:
                 continue
             o = (self.obs[idx] - self.obs_mean) / self.obs_std
-            a = (self.act[idx:idx + self.horizon] - self.act_mean) / self.act_std
-            a = np.stack(a, 0)  # [B, H, da]
+            a = np.stack([self.act[i:i + self.horizon] for i in idx], 0)
+            a = (a - self.act_mean) / self.act_std
             s = np.eye(self.n_skills)[self.skill[idx]]
             yield (torch.from_numpy(a).float().to(self.device),
                    torch.from_numpy(o).float().to(self.device),
@@ -51,8 +51,8 @@ class DemoLoader:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene", default="pick-place-v3")
-    ap.add_argument("--data_dir", default="results/metaworld/data")
-    ap.add_argument("--out_dir", default="results/metaworld/models")
+    ap.add_argument("--data_dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/data"))
+    ap.add_argument("--out_dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../results/metaworld/models"))
     ap.add_argument("--horizon", type=int, default=16)
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--n_iter", type=int, default=60000)
