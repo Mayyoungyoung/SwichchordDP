@@ -51,3 +51,12 @@ pip freeze > requirements.txt
 | LIBERO 数据集（153 GB，含 libero_10/90/goal/object/spatial） | /home/jia/VLA/libbero_tmp/datasets | LIBERO 增信实验 |
 | libero 包（pip 可编辑安装于 turbovla-libero） | /home/jia/VLA/libbero_tmp | LIBERO 训练/评测 |
 | Meta-World 演示数据 | 训练脚本生成或官方数据集 | Meta-World 概念验证 |
+
+## 执行记录(2026-09-02)
+
+- swdp 环境安装: torch 2.3.1+cu118、metaworld 3.1.1(mujoco 3.3.0)、gymnasium 1.3.0、h5py、hydra-core。
+- turbovla-libero 环境原样复用(LIBERO 分段提取、技能 DP 训练、离线拼接评测),未做任何修改。
+- 数据资产: LIBERO-10 全部 10 任务 hdf5 已完成启发式分段(夹爪动作切换 + 速度谷值),
+  结果在 results/libero/data/。
+- 训练产物: results/metaworld/models/(pick-place 5 技能 DP、端到端 DP、door-open DP),
+  results/libero/models/(LIBERO 统一技能 DP)。均在 .gitignore 中,不提交。
