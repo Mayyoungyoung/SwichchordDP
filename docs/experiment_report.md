@@ -421,3 +421,15 @@ n=48 未达显著（SE≈0.073）。论文表述应为「一致性优势 + 离�
 3. 恢复闭环：掉落状态增广演示数据（recovery-aware augmentation）
 4. 语义嵌入条件（enc(z)）验证 L(c,c′) 的 P2/P4 预言
 5. 论文统计口径：单组 100+ 回合或汇总检验
+
+### 10.4 全 10 任务图像模型落地（当日补记）
+
+增广(8px 平移)+60k iter 的全量训练与自动在线评测链完成：
+
+- 技能进度（10 任务 × 3 回合）：**avg 0.290**（状态 DP 0.208，+39%）；
+  大幅提升：KITCHEN_SCENE3 stove+moka 0.00→0.67、LIVING_SCENE1 basket 0.33→0.56、
+  LIVING_SCENE2 soup+tomato 0.42→0.62；仍卡 0.00：cream+butter、bowl drawer、
+  book caddy、microwave（图像版 KITCHEN_SCENE6 从 0.17 回落到 0.00）。
+- 在线 BDDL e2e 仍 0%（3 回合/任务）；边界能量 0.65-9.8。
+- 结论：图像+增广是明确的正向杠杆但不充分；下一杠杆 = 预训练视觉编码器
+  （R3M/VC-1/CLIP）+ 全量 50 演示。完整分析与路线见 docs/status_summary.md。
