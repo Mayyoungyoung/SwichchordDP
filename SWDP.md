@@ -264,4 +264,7 @@ ChordEdit 附录 D/E 的定理把状态空间从图像潜在换成动作块后**
 - 概念验证实验结论(2026-09-02)见 [docs/experiment_report.md](docs/experiment_report.md):
   Chord 场 vs 硬切换成功率 3×、场能量 3×↓;可行性投影为最强独立贡献(LIBERO 拼接 MSE -36%)。
 - v2 修订要点:Chord 场公式权重按原文修正(`û = [t·R(t−δ) + δ·R(t)]/(t+δ)`)、τ→λ 符号分离、B_t 动作空间闭式系数补全、新增定理重排(投影稳定性为头号)、验证方案落地为「Meta-World 主 + LIBERO 增信」、风险清单更新(时间步平移质疑/GSC-SCaR 撞车)。
+- 第三轮审计(2026-09-03)见 [docs/experiment_report.md](docs/experiment_report.md) §9:
+  **B_t 符号 bug 已修复**(A_t^(eps) = −γ_max/(2σ), 修复后 5 链 0.25→0.64);
+  新增 chord_recon 方法(Chord 平滑 + 一步 x0 重建, 24 回合 0.708)。
 - v3 修订要点(2026-09-03,见 [docs/design_optimization.md](docs/design_optimization.md)):调研 TAPT(arXiv:2605.13119)与 HELM(arXiv:2604.18791),方案升级为「规划-组合」双层框架;条件从 one-hot 技能升级为工具调用 (g,z) 语义嵌入;新增场能量风险信号与事件式重规划;定理 2 语义化为工具对组合稳定性条件;验证方案对标 LIBERO-Long 在线/CF-Long 忠实度/HELM 式恢复评测。
