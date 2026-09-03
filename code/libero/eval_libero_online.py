@@ -45,7 +45,8 @@ def get_env(task):
 
 def env_obs(obs):
     return np.concatenate([obs["robot0_gripper_qpos"], obs["robot0_eef_pos"],
-                           obs["robot0_eef_quat"]]).astype(np.float32)
+                           obs["robot0_eef_quat"],
+                           obs["object-state"]]).astype(np.float32)
 
 
 @torch.no_grad()

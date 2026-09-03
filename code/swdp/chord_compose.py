@@ -140,6 +140,32 @@ def chord_field(dp, a_anchor, tau, delta, obs, s_from, s_to, n_noise=1,
              ALPHA(torch.as_tensor(tau, device=device)).clamp(min=1e-3)
         u = x0 - a_anchor
         return u, dict()
+    elif mode == "chord_recon":
+        # Chord 平滑 + 一步 x0 重建(GSC 强度 + Chord 稳定性):
+        # 对「噪声预测差」做 Chord 时间加权平均, 加到源技能分数上做 x0 重建。
+        # 与 eps 空间 chord 的区别: 平滑对象是原始 Δeps(无 B_t 放大), 且输出是重建而非扰动。
+        B = a_anchor.shape[0]
+        device = a_anchor.device
+        gen = torch.Generator(device=device)
+        if rng is not None:
+            gen.manual_seed(int(rng))
+        t = torch.as_tensor(tau, device=device)
+        td = torch.as_tensor(tau - delta, device=device)
+        acc = torch.zeros_like(a_anchor)
+        for _ in range(n_noise):
+            eps = torch.randn(a_anchor.shape, device=device, generator=gen)
+            z = ALPHA(t) * a_anchor + SIGMA(t) * eps
+            z_prev = ALPHA(td) * a_anchor + SIGMA(td) * eps
+            tt = torch.full((B, 1), tau, device=device)
+            ttp = torch.full((B, 1), tau - delta, device=device)
+            q_a = dp.Q(z, tt, obs, s_from)
+            d_cur = dp.Q(z, tt, obs, s_to) - q_a
+            d_prev = dp.Q(z_prev, ttp, obs, s_to) - dp.Q(z_prev, ttp, obs, s_from)
+            d_chord = (tau * d_prev + delta * d_cur) / (tau + delta)
+            x0 = (z - SIGMA(t) * (q_a + d_chord)) / ALPHA(t).clamp(min=1e-3)
+            acc = acc + (x0 - a_anchor)
+        u = acc / n_noise
+        return u, dict()
 
 
 def temporal_mask(horizon: int, boundary: int, width: int, device: str = "cuda"):

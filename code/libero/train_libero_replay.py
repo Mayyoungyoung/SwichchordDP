@@ -77,8 +77,10 @@ def main():
     else:
         n_skills = 8
         tag = "replay"
+    with h5py.File(paths[0], "r") as f:
+        obs_dim = f["obs"].shape[1]
     loader = ReplayLoader(paths, args.horizon, args.batch, device, n_skills, seed=7)
-    model = SkillDP(7, args.horizon, 9, n_skills, device=device)
+    model = SkillDP(7, args.horizon, obs_dim, n_skills, device=device)
     opt = torch.optim.Adam(model.parameters(), lr=2e-4)
     it = iter(loader)
     losses = []

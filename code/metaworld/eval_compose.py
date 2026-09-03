@@ -168,6 +168,8 @@ def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
                                       lam, n_noise, mode, mask, use_proj,
                                       seed=seed + t, x0_space=X0_SPACE)
             nfe += (2 if mode in ("chord",) else 1) * n_noise
+            if mode == "chord_recon":
+                nfe += 2 * n_noise  # 两个时刻各一次条件差查询
             # 记录传输场能量
             energies.append(info_t["energy"])
             chunk = a_new
@@ -224,7 +226,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene", default="pick-place-v3")
     ap.add_argument("--mode", default="chord",
-                    choices=["chord", "naive", "eff_shift", "energy"])
+                    choices=["chord", "naive", "eff_shift", "energy",
+                             "chord_recon"])
     ap.add_argument("--n_episodes", type=int, default=10)
     ap.add_argument("--tau", type=float, default=0.9)
     ap.add_argument("--delta", type=float, default=0.15)

@@ -25,14 +25,19 @@ def get_schedule(gamma_max: float = 12.5):
     return alpha, sigma
 
 
-# B_t 闭式系数(epsilon 预测, VP 调度): A_t^(eps) = -alpha_dot/(alpha*sigma) = gamma_max/(2*sigma)
-# (alpha_dot = alpha * gamma_max / 2, 见 docs/survey.md 附录 C)
+# B_t 闭式系数(epsilon 预测, VP 调度): A_t^(eps) = sigma_dot - alpha_dot*sigma/alpha = -gamma_max/(2*sigma)
+# 推导: 共享 z = alpha*a + sigma*eps 上 alpha*Δa + sigma*Δeps = 0 -> Δa = -(sigma/alpha)Δeps;
+#       Δv = alpha_dot*Δa + sigma_dot*Δeps = (sigma_dot - alpha_dot*sigma/alpha)*Δeps = -gamma_max/(2 sigma)*Δeps
+# (alpha_dot = alpha*gamma_max/2 > 0, sigma_dot = -alpha^2*gamma_max/(2 sigma) < 0;见 docs/survey.md 附录 C)
 ALPHA, SIGMA = get_schedule()
 
 
 def b_t_epsilon(tau):
-    """可观测残差映射系数 A_t^(eps) = gamma_max / (2 * sigma(tau))。"""
-    return 6.25 / SIGMA(tau)  # gamma_max/2 = 6.25
+    """可观测残差映射系数 A_t^(eps) = -gamma_max / (2 * sigma(tau))。
+
+    注意负号: 速度差 Δv 与噪声预测差 Δeps 方向相反(噪声越大 -> 越远离干净块)。
+    """
+    return -6.25 / SIGMA(tau)  # -gamma_max/2 = -6.25
 
 
 class FiLM(nn.Module):
