@@ -29,12 +29,12 @@ MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "../../results/metaworld/models")
 SCENE = "pick-place-v3"
 SEQ = ["reach", "grasp", "lift", "carry", "place"]
-STEPS = {"reach": 30, "grasp": 30, "lift": 25, "carry": 30, "place": 30}
+STEPS = {"reach": 30, "grasp": 30, "lift": 25, "carry": 30, "place": 40}
 
 
 @torch.no_grad()
 def rollout_recovery(dp, disturb=True, use_replan=True, rho=5.0, lam=0.15,
-                     seed=0, disturb_skill="carry"):
+                     seed=0, disturb_skill="carry", replan_to="grasp"):
     env = make_env(SCENE, seed=1000 + seed)
     obs, info = env.reset()
     with h5py.File(os.path.join(DATA_DIR, f"{SCENE}.h5"), "r") as f:
@@ -67,7 +67,7 @@ def rollout_recovery(dp, disturb=True, use_replan=True, rho=5.0, lam=0.15,
         disturb_t = int(rng.integers(lo, hi))
     replans = 0
     energies = []
-    max_steps = total + (30 + 25 + 30 + 30)  # 允许一次恢复追加 grasp+lift+carry+place
+    max_steps = total + (30 + 25 + 30 + 40)  # 允许一次恢复追加 grasp+lift+carry+place
     t = 0
     while t < max_steps:
         # 边界交接
@@ -86,9 +86,9 @@ def rollout_recovery(dp, disturb=True, use_replan=True, rho=5.0, lam=0.15,
             spike = info["energy"] > max(3.0 * baseline, 1.0)
             if use_replan and spike and SEQ[cur] == "place" and replans == 0:
                 replans += 1
-                cur = SEQ.index("grasp")
+                cur = SEQ.index(replan_to)
                 step_in_skill = 0
-                chunk = sample_chunk(norm_obs(obs), ids["grasp"])
+                chunk = sample_chunk(norm_obs(obs), ids[replan_to])
                 step_in_chunk = 0
                 t += 1
                 continue
@@ -122,14 +122,22 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--n_episodes", type=int, default=10)
     ap.add_argument("--rho", type=float, default=5.0)
+    ap.add_argument("--lam", type=float, default=0.15)
+    ap.add_argument("--place_steps", type=int, default=30)
+    ap.add_argument("--replan_to", default="grasp",
+                    choices=["grasp", "reach"])
+    ap.add_argument("--tag", default="")
     args = ap.parse_args()
+    global STEPS
+    STEPS["place"] = args.place_steps
     dp = SkillDP.load(os.path.join(MODEL_DIR, f"dp_{SCENE}.pt"), DEVICE)
     dp.eval()
     out = {}
     for tag, kw in [("clean", dict(disturb=False, use_replan=False)),
                     ("disturb_noreplan", dict(disturb=True, use_replan=False)),
                     ("disturb_replan", dict(disturb=True, use_replan=True))]:
-        rows = [rollout_recovery(dp, rho=args.rho, seed=7 * ep + 1, **kw)
+        rows = [rollout_recovery(dp, rho=args.rho, lam=args.lam, seed=7 * ep + 1,
+                                 replan_to=args.replan_to, **kw)
                 for ep in range(args.n_episodes)]
         rate = float(np.mean([r["success"] for r in rows]))
         deliv = float(np.mean([r["delivered"] for r in rows]))
@@ -138,9 +146,10 @@ def main():
               f"({sum(r['success'] for r in rows):.0f}/{len(rows)}), "
               f"delivered = {deliv:.2f}")
     os.makedirs("results/metaworld/eval", exist_ok=True)
-    with open("results/metaworld/eval/recovery.json", "w") as f:
+    name = f"recovery_l{args.lam}_p{args.place_steps}_r{args.replan_to}{args.tag}.json"
+    with open(f"results/metaworld/eval/{name}", "w") as f:
         json.dump(out, f, indent=2, default=str)
-    print("[recovery] saved results/metaworld/eval/recovery.json")
+    print(f"[recovery] saved results/metaworld/eval/{name}")
 
 
 if __name__ == "__main__":

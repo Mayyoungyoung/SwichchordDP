@@ -267,4 +267,10 @@ ChordEdit 附录 D/E 的定理把状态空间从图像潜在换成动作块后**
 - 第三轮审计(2026-09-03)见 [docs/experiment_report.md](docs/experiment_report.md) §9:
   **B_t 符号 bug 已修复**(A_t^(eps) = −γ_max/(2σ), 修复后 5 链 0.25→0.64);
   新增 chord_recon 方法(Chord 平滑 + 一步 x0 重建, 24 回合 0.708)。
+- 第四轮(2026-09-03)见 [docs/experiment_report.md](docs/experiment_report.md) §10 与
+  [docs/theory_composability.md](docs/theory_composability.md):
+  L(c,c′) 分解定理严格化(家族距离+接地距离, 链式误差可加分解);
+  1 步学生无差距的根因诊断(场 τ-共线 0.98 → 平滑退化, 传输编辑本身有效 -63% err);
+  图像 CNN-DP 试点(同任务对照: 状态 0.42 / 无增广图像 0.25 / **增广+60k 图像 0.62**;
+  从零 CNN 是杠杆, 但必须配平移增广+足够迭代, 已扩至全 10 任务)。
 - v3 修订要点(2026-09-03,见 [docs/design_optimization.md](docs/design_optimization.md)):调研 TAPT(arXiv:2605.13119)与 HELM(arXiv:2604.18791),方案升级为「规划-组合」双层框架;条件从 one-hot 技能升级为工具调用 (g,z) 语义嵌入;新增场能量风险信号与事件式重规划;定理 2 语义化为工具对组合稳定性条件;验证方案对标 LIBERO-Long 在线/CF-Long 忠实度/HELM 式恢复评测。
