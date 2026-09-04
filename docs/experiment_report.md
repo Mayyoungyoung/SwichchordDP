@@ -433,3 +433,293 @@ n=48 未达显著（SE≈0.073）。论文表述应为「一致性优势 + 离�
 - 在线 BDDL e2e 仍 0%（3 回合/任务）；边界能量 0.65-9.8。
 - 结论：图像+增广是明确的正向杠杆但不充分；下一杠杆 = 预训练视觉编码器
   （R3M/VC-1/CLIP）+ 全量 50 演示。完整分析与路线见 docs/status_summary.md。
+
+---
+
+## 11. 第五轮迭代（2026-09-04：衔接分水岭诊断 + Harness 架构重构）
+
+### 11.1 分水岭诊断实验（`code/metaworld/diag_handoff.py`）
+
+**动机**：外部建议的核心判断——「A 的终态差异是否强烈决定 B 的成功率」是后续路线的
+分水岭：敏感 → 上 Future Success Predictor + Candidate Reranking；平坦 → 回头强化
+action-level。本实验不训任何模型，直接用真实 rollout 度量 P(B|s)。
+
+**协议**：
+- 4 个边界：carry→place（主）、grasp→carry、lift→place、reach→grasp；
+- A 序列用脚本控制器执行到边界（与 eval_compose.setup 同协议），施加参数化扰动：
+  - `puck_dx/dy`：物体沿轴瞬移（隔离 B 对物体位置的敏感度）；
+  - `eef_offset`：eef 携物移开（物理一致的连续偏移，测 B 闭环纠正域）；
+  - `puck_drop`：物体掉落桌面 + xy 随机偏移（结构失配/恢复场景）；
+- 每维度 6 档 × 8 seeds + baseline 8 seeds，B 用冻结 DP receding-horizon 执行
+  （n_ddim=24, resample=8，协议同 eval_compose）；
+- 增强判定（diag_success）：grasp/carry 必须含物体（原判定空手也算成功，会掩盖效应）。
+
+**结果**（`results/metaworld/eval/diag_handoff.json` + `.png`）：
+
+| 边界 | baseline | 关键曲线（连续类） | 结构类 |
+|---|---|---|---|
+| carry→place | **1.00** | eef_offset: 1.0 / 1.0 / 0.88 / 0.88 / 0.62 / **0.12**（0.03→0.18m 平滑单调退化） | puck 瞬移/掉落 ≈0（脱手不可挽救） |
+| reach→grasp | **1.00** | puck_dx: 1.0/1.0/**0.25**/0（纠正域 ~0.05m）；puck_dy 纠正域 ~0.06-0.09m（**方向不对称 2×**）；eef_offset: 1.0/0.62/**0**（纠正域 ~0.05m） | — |
+| grasp→carry | 0.12 | 各维度平坦（基线已低） | — |
+| lift→place | **0.00** | 全 0（unseen 结构性不兼容：物体不在 goal 上方，place 无法成功） | 同左 |
+
+**标定**（`diag_handoff_calib.json`，20 回合 chord 5 链主表配置 λ=0.3 mask+proj）：
+真实链边界散布——carry→place 处 hand-goal xy std **0.053m**、hand z std 0.084m、
+puck z std 0.122m；reach→grasp 处 puck xy std **0.070m**。
+
+**判读（SENSITIVE，阶段 C 启动）**：
+1. 连续类扰动产生**平滑单调的 P(B|s) 退化曲线**（carry→place 从 1.0 到 0.12）——
+   F_B(s,B) 可学且有信息量，Candidate Reranking 有真实优化空间；
+2. **真实链边界散布与退化区重叠**：reach→grasp 的 puck std 0.070m 已超过 grasp 纠正
+   域 0.05m，carry→place 的 hand-goal std 0.053m 落在 eef_offset 曲线退化区间——
+   现有 5 链 0.562 的失败部分确实来自 state mismatch（action-level 平滑无法解决）；
+3. 结构失配类（脱手/掉落/lift→place）恒定 P≈0——F_B 无法挽救，属 recovery 领域
+   （与恢复实验「重规划回 grasp 0%」的 OOD 根因互证）；
+4. puck_dx 与 puck_dy 敏感度差 2×——F_B 输入须用完整状态向量（非标量距离）。
+
+### 11.2 Harness 架构重构（`code/swdp/harness.py`）
+
+对标 Harness VLA（清华 2026-07, arXiv 2607.08448）的系统层思路，把
+eval_compose / eval_recovery / eval_libero_online 三份重复的 rollout 主循环收敛为
+统一执行层：`SkillRuntime`（采样/规范化/NFE）+ `TransitionSpec`（衔接配置，预留
+n_candidates/selector）+ `RiskMonitor`（能量尖峰）+ `ChainExecutor`（主循环 +
+on_boundary/on_risk/action_filter/stop_fn 钩子；切换触发 fixed/criterion 两策略）。
+
+回归验证：eval_recovery 迁移后同 seed 能量序列逐边界一致（45.1/9.4/5.4/7.1 完全
+复现，clean succ 同步）；后续回合的微小分叉源于旧协议 sample(seed=None) 的全局 RNG
+固有方差（已知问题），统计行为等价。eval_compose 48 回合主表回归见 §11.3。
+
+### 11.3 主表 48 回合回归（迁移后 ChainExecutor）
+
+同协议同种子（seed=ep·7+1，λ=0.3 mask+proj，48 回合/链），对比历史主表：
+
+| 链 | 历史主表 chord | 迁移后 chord | 历史主表 naive | 迁移后 naive |
+|---|---|---|---|---|
+| reach→grasp (seen) | 1.000 | **1.000** | 1.000 | **1.000** |
+| 5 链 (seen) | 0.562 | **0.562** | 0.500 | **0.500** |
+| reach→carry (unseen) | ≈0 | **0.000** | ≈0 | 0.021 |
+| grasp→carry (unseen) | — | 0.208 | — | 0.417 |
+| lift→place (unseen) | — | 0.167 | — | 0.167 |
+| place (unseen) | 1.000 | **1.000** | 1.000 | **1.000** |
+
+（`regress_chord_mask_proj.json` / `regress_naive_mask_proj.json`；历史列取 §9 的
+48 回合口径，unseen 三行历史表未含 48 回合明细，仅「接近 0」量级参考。）
+**主指标（5 链 0.562 / naive 0.500）与 seen 链全部复现**，Harness 化重构行为不变 ✓。
+
+## 12. 第六轮迭代（2026-09-04：F_B 预测器 + Candidate Reranking）
+
+### 12.1 F_B：Future Success Predictor（`code/swdp/success_model.py`）
+
+**数据**：§11.1 诊断 rows（752 条 (s, B, y) 三元组，正例率 0.17，扰动档位覆盖
+真实边界散布）。特征 = 19 维手工几何 [hand, grip, puck, goal, hand−puck,
+hand−goal, puck−goal] + 技能 one-hot——带符号相对量保留方向不对称信息，
+绝对坐标提供桌面系上下文。结构：3 层 MLP（64→32→1），BCE 训练 300 epochs。
+
+**结果**（`fb_pick-place-v3.pt` + `_metrics.json` + `_calib.png`，5 折 CV）：
+
+| 指标 | 值 | 目标 |
+|---|---|---|
+| AUC | **0.879** | — |
+| ECE | **0.068** | < 0.1 ✓ |
+| Brier | 0.100 | — |
+
+按扰动维度分桶 AUC：baseline 0.969 / puck_dx 0.932 / puck_dy 0.950 /
+eef_offset 0.928 / puck_drop 0.882——**所有维度都有预测力**，F_B 学到的是几何
+结构而非记忆扰动档位；结构类（drop）稍弱符合预期（物体掉落后的成功率还
+依赖接触动力学）。
+
+### 12.2 Candidate Reranking（harness on_boundary 钩子）
+
+**实现**（`code/swdp/harness.py` `_do_boundary`，`TransitionSpec.n_candidates>1`
+启用）：边界处 obs/one-hot 复制 N=8 → `dp.sample` 一次批量采 8 个独立噪声候选
+（DDIM 确定性积分下仅初始噪声不同）→ 各自过 `cc.switch`（chord 场 + 时间掩码）
++ `prox_feasible` → selector 选优。NFE 仅 +1 次 anchor 采样（5 链 552→560）。
+
+**F_B 选择器**（`eval_compose.make_fb_selector`）：score_i = F_B(ŝ_i) − λ_r·Ê_i
+（Ê 为候选能量 min-max 归一，λ_r=0.1）。ŝ 外推用 Meta-World 结构近似：动作即
+mocap 目标 delta-pos（[-1,1]×0.01m，实测确认），hand 二阶跟踪用 follow=0.5
+近似短期跟踪率；携物（grip<0.5）时物体跟手；外推步数 = resample=8
+（receding-horizon 下候选块实际只执行前 8 步）。
+
+**消融臂**：selector="random"（8 候选随机选）排除「多采样计算量」混淆——
+若 fb > random ≈ chord 则增益来自 F_B；若 random ≈ fb > chord 则增益仅来自
+多采样。
+
+### 12.3 四臂 + 变体评测（24 回合×6 链同种子配对，共 144 回合）
+
+同种子配对（seed=ep·7+1），5 链主指标与 McNemar 精确检验：
+
+| 臂 | 5 链 e2e | vs chord (配对) | ALL(6 链) |
+|---|---|---|---|
+| naive | 0.583 | — | 0.542 |
+| chord（N=1） | 0.667 | — | 0.507 |
+| chord+random-cand（N=8） | 0.708 | +4/−3, p=1.0 | 0.514 |
+| chord+F_B-cand（N=8, λ_r=0.1） | 0.542 | +5/−8, p=0.58 | 0.472 |
+| chord+F_B-cand（λ_r=0） | 0.375 | +3/−10, p=0.09 | 0.451 |
+| chord+F_B-cand（λ_r=−0.2，能量正向） | 0.542 | +1/−4, p=0.38 | 0.479 |
+
+**切捖触发消融（C4，独立表）**：criterion（skill_success 判据提前切捖 + 超时
+×1.5）5 链 **0.042**（崩塌）——现有判据在技能中途即满足（如 grasp 仅看夹爪闭合），
+提前切捖使状态未就绪即进入后继技能；但 unseen 短链受益：reach→carry 0.333
+（chord 0）/ grasp→carry 0.458（chord 0.25）。**fixed 仍为主协议**，criterion 仅
+在短链/失败恢复场景有条件使用。
+
+**判读（负结果，但定位了 F_B 的正确用法）**：
+1. **多采样无增益**：random8 vs chord 仅 +1 回合（p=1.0）——候选池扩大本身
+   不提升成功率，排除「多采样计算量」解释；
+2. **F_B 候选选择无增益且略负**：三个 λ_r 变体（0/0.1/−0.2）均 ≤ chord；
+3. **根因（边界处实证）**：逐边界打印 8 候选的 F_B 概率与能量发现——**候选间
+   概率平坦**（差异 <0.02，如 [0.596, 0.595, 0.595, …]）：8 步外推位移 ~0.04m
+   落在 F_B 概率平坦区（§11 的 eef_offset 曲线 0.03-0.05m 内 P≈1 的物理纠正域）；
+   而跨边界 F_B 动态范围大（0.08→0.6），预测器本身工作正常；
+4. **方法论结论**：F_B 对「边界状态质量」有强预测力（分水岭诊断 + CV AUC 0.879），
+   但**单边界内动作块候选的可分辨差异物理上不足**——F_B 的正确位置是**大状态差异
+   决策**：恢复场景的跨技能重规划目标选择、on_skill_end 的 fb 提前切捖、
+   或更长视野（24 步整块）外推；而不是 8 候选微选择。
+
+（复现：`arm_analysis.py` + 上述 JSON；诊断打印脚本内嵌于本轮会话记录。）
+
+## 13. 第七轮迭代（2026-09-04：Terminal-State Diversity 决策链）
+
+按外部建议的决策性实验链执行：**① 合法 A 终态是否显著决定 B？→ ② F_B 能否
+识别？→ ③ 高 F_B 状态可达吗？**——逐层证伪，只有前一层成立才进入下一层。
+本阶段不新增任何方法组件。**本轮经历了协议 bug 发现-修复-结论翻转的完整过程，
+最终结论为 No-Go（停止 Future-Aware C2 路线）**，过程与教训如实记录如下。
+
+### 13.1 协议与数据（`diag_termdiv.py`）
+
+carry→place（选对标准：§11 诊断敏感 + 单技能成功率双高）：
+- Natural Diversity：冻结 DP carry 从脚本 setup 状态自然执行 240 回合，保存
+  完整 sim state（qpos/qvel/mocap）；
+- 合法性过滤 = A-success（carry 语义）∧ physics-valid（settle 20 步后位置漂移
+  <5mm、物体高度/线速度/关节限位）——220/240 通过；
+- 每终态 reset sim → 冻结 DP place × 10（独立 seed）→ P_emp(B|s)。
+
+**协议 bug 及修复**：初版 rollout_B 在每次 B rollout 前未恢复终态，第一次 place
+执行后状态被连续破坏，伪造成双峰 P_emp（84% 状态=0.1、6%=1.0，R_B=1.0）。
+修复（每次 rollout 前恢复 qpos/qvel/mocap）后重跑，**结论完全翻转**。
+
+### 13.2 RQ①：合法终态对 B 的影响很弱（No-Go）
+
+修复后 220 状态 × 10 rollouts：
+
+| 指标 | 值 |
+|---|---|
+| P_emp mean / std | **0.974 / 0.060** |
+| min / max | 0.60 / 1.00（80% 状态 =1.0） |
+| R_B（dynamic range） | 0.400（bootstrap CI [0.2, 0.4]，主要由 3 个低分状态拉开） |
+| oracle gap（Top/Bottom 20%） | 0.130 |
+| F_B(v1) Spearman | −0.073（p=0.28，n.s.） |
+
+**判读**：在 A 的合法终态域内（自然散布 σ≈0.05m），place 几乎总是成功
+（0.97）——**「合法 A 终态显著决定 B」不成立**。§11 诊断的敏感曲线
+（eef_offset 1.0→0.12）是 **OOD 大扰动区**（0.1-0.18m 偏移）的现象，超出
+「合法 A 终态」的语义（A 已算失败），属于 A 失败后的 recovery 领域。
+
+失败状态特征（P<0.9 的 13 个）：goal z 低（0.05-0.16m）+ hand z 低
+（0.25-0.33m）——低目标高度下 DP place 有少量失败，但效应量小（0.97→0.9 量级）。
+
+### 13.3 决策链结论：Future-Aware C2 停止，方向重定位
+
+| 问题 | 答案 |
+|---|---|
+| ① 合法终态显著决定 B？ | **NO**（P_emp 0.974±0.06，R_B≈0.1 量级除去极值） |
+| ② F_B 能识别？ | 无信号可识别（Spearman n.s.） |
+| ③ 可达性/引导？ | 无需进入（前置不成立） |
+
+**No-Go 判读（按建议门槛：R_B>0.5 且 Gap_FB>0.2 才 GO）**：停止
+Future-Aware C2（terminal-state selection / F_B-guided A-tail 均不再做）。
+决策链的价值：在实现复杂的 Foresight Guidance 之前，以 220×10 rollouts 的
+代价将其证伪。
+
+**方向重定位**（与 §11-§12 证据整合）：
+1. F_B 的正确域是**大状态差异**（A 失败/OOD 终态）：§11 诊断的大扰动曲线
+   （0.18m 偏移 → P(B)=0.12）与 §12 跨边界 F_B 动态范围（0.08→0.6）都指向
+   recovery 领域——F_B 应作为「重规划到哪个技能」的选择信号（C3），而非
+   合法终态内的微选择；
+2. 5 链 0.562 的失败根源重新聚焦：**不是边界状态微差异**（合法域内 B 几乎
+   全成功），而是技能执行失败累积（carry 单技能 0.88）+ A 失败后无恢复 + 
+   unseen 技能对的 action-level 问题——D 阶段（Recovery-aware 增广）优先级
+   上升，其根因正是「A 失败后进入 OOD 终态域」；
+3. 本轮 F_B v2 / reachability / guided 实验建立在初版 bug 数据上，其结果作废
+   （已随修复后数据重新审阅，不再报告）。
+
+（复现：`diag_termdiv.py`；`termdiv_carry_place.json` 为修复后数据；
+初版 bug 数据已覆盖。）
+
+### 13.4 代码审查修正与三对泛化检验（第八轮，2026-09-04）
+
+**代码审查发现并修正**：
+1. 【重大】初版 collect 用脚本 setup（精确执行），终态散布仅 0.023m，
+   为真实链边界散布（0.053m）的 43%——测的域比真实链窄。改为 DP 链 setup
+   （误差累积，代表真实分布）；
+2. 【bug】fb_gap 的 bootstrap CI 只重采样 p_emp 后按 p_emp 自排序——算的是
+   oracle gap 的 CI。改为 (fb, p_emp) 成对重采样；
+3. 【bug】restore 后未重置 curr_path_length（侥幸未超限）；
+4. PCA evr 用奇异值而非平方。
+
+**三对泛化检验**（DP 链 setup，240 回合，K=10，同协议）：
+
+| 对 | kept | P_emp mean±std | R_B | oracle gap | F_B(v1) Spearman | 判读 |
+|---|---|---|---|---|---|---|
+| carry→place | 185/240 | 0.972±0.081 | 0.70 | 0.138 | −0.013 (n.s.) | No-Go |
+| reach→grasp | 215/240 | 0.990±0.037 | 0.30 | 0.051 | +0.100 (n.s.) | No-Go |
+| grasp→lift | 230/240 | **0.913±0.275** | **1.00** | **0.433** | −0.031 (n.s.) | **现象存在** |
+
+carry→place 重跑（DP setup）与旧版（脚本 setup）结果一致（0.972 vs 0.974）
+——旧 No-Go 经受住 setup 修正检验。注：即使 DP setup，合法域内
+hand-goal xy std 仍仅 0.013m（合法性过滤本身收窄域：合法 carry=到位域，
+散布必然窄）——这本身是「位置型合法域天然窄」的证据。
+
+**reach→grasp**：合法域（hand-puck xy<0.03）内 B 几乎全成功（0.990）
+——§11 预测的「散布 0.070>纠正域 0.05」在合法域内不成立（散布大的
+状态已被 A-success 过滤）。
+
+### 13.5 grasp→lift 单独分析：劣质抓取亚域（真实失败模式）
+
+**现象**：230 个语义合法 grasp 终态中，19 个（8.3%）P_emp=0.0（10 次
+lift 全败）、7 个部分成功、204 个全成功——双峰分布，oracle gap 0.433。
+
+**失败模式完全可辨识**（与成功态的 Mann-Whitney 检验）：
+
+| 特征 | 失败态 (n=19) | 成功态 (n=204) | p |
+|---|---|---|---|
+| grip（夹爪开度） | [0.292, 0.322]，m=0.297 | [0.427, 0.455]，m=0.438 | 5.9e-13 |
+| hand-puck xy | [0.011, 0.039]，m=0.028 | [0.000, 0.015]，m=0.005 | 9.1e-13 |
+| hand z | m=0.063 | m=0.050 | 3.1e-04 |
+
+物理本质：**过度闭合（grip 0.29 vs 正常 0.44）+ 偏心抓取（0.028 vs
+0.005）→ lift 提升时物体被挤出/滑落**。两个主特征区间几乎不重叠
+（单 grip 阈值 0.37 即可 100% 分离失败态）——特征空间线性可分。
+
+**F_B 可学习性**（该对自然数据 5 折 CV，Bernoulli 展开）：FB_gap=**+0.420**，
+Spearman=**+0.462**（p=1.4e-13），ECE=0.105；单特征 grip 基线已达 +0.431。
+F_B(v1) 失效根因再次确认：诊断扰动训练数据（位置位移）不含抓取质量维度。
+
+**与主表交叉验证**：5 链 chord 的 lift per_skill=0.729（27% 失败率，第一
+显著失败点）。termdiv 隔离测得合法域内劣质抓取率 8.7%（全败），连续链中
+grasp 终态分布更宽（无 settle），劣质抓取是 lift 失败的重要成分。
+
+### 13.6 最终结论（条件性，取代 13.3 的单一 No-Go）
+
+| 技能对类型 | 现象 | 结论 |
+|---|---|---|
+| 位置型（carry→place、reach→grasp）：合法域=几何到位域，B 有充分纠正能力 | 终态变异无影响（P_emp≈0.97-0.99） | **C2 终态选择/引导正式关闭** |
+| 质量型（grasp→lift）：语义合法但物理劣质亚域（8.3%，双峰全败，线性可分） | 现象存在且极易识别 | 差异归入 **C3 检测-恢复范式**（非 C2 选择问题） |
+
+**grasp→lift 的差异本质上不是 C2 问题而是 C3 问题**：
+1. 它不是「多个合法终态中选好的」——DP grasp 产出什么终态没有选择余地
+   （§12 已证被动采样无多样性）；
+2. 它是「检测劣质状态 → 触发恢复（重抓 regrasp）」的检测-恢复范式——
+   正是 RiskMonitor/F_B 在 C3 中的定位；
+3. 可操作收益：劣质抓取检测（单 grip 阈值或 F_B v2）+ regrasp 重规划
+   可挽回 ~8% 的 e2e 上限损失（与 carry 0.88 的损失同量级）。
+
+**F_B 的最终定位**（三对证据链）：
+- 训练分布教训（两次验证）：F_B 必须在目标分布的自然数据上训练
+  （诊断扰动数据只覆盖位置维度，抓取质量维度完全缺失）；
+- 角色定位：劣质状态检测器（C3：检测→重规划），不是终态选择器（C2 已关）。
+
+（复现：`diag_termdiv.py --pair {carry->place|reach->grasp|grasp->lift}`；
+`termdiv_{carry_place,reach_grasp,grasp_lift}.json/.png`；F_B v2 验证
+脚本内嵌于本轮会话记录。）

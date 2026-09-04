@@ -22,6 +22,8 @@ from swdp.policy import SkillDP  # noqa: E402
 from swdp.distil import ConsistencyStudent  # noqa: E402
 from swdp import chord_compose as cc  # noqa: E402
 from swdp.feasibility import prox_feasible  # noqa: E402
+from swdp.harness import (SkillRuntime, TransitionSpec,  # noqa: E402
+                          ChainExecutor)
 from skills import make_env, SKILLS  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -96,13 +98,59 @@ def est_lipschitz(dp, a, obs, s, n_pert=16, eps=1e-2):
     return max_ratio
 
 
+def make_fb_selector(fb, rt, scene, lam_r=0.1, follow=0.5,
+                     action_scale=0.01):
+    """F_B 候选选择器: score_i = F_B(ŝ_i) - λ_r·Ê_i(归一化能量惩罚)。
+
+    ŝ 外推(Meta-World 结构近似, 计划 C2 第一版):
+    - 动作即 mocap 目标 delta-pos(归一化 [-1,1] × action_scale=0.01m);
+      hand 二阶跟踪 -> follow 系数近似短期跟踪率(实测 8 步 ~0.5);
+    - 外推步数 = resample(候选块 receding-horizon 下实际只执行前 R 步);
+    - 物体: grip 闭合(<0.5)时随手平移, 否则不动(工作空间假设);
+    - grip/goal 保持当前值(候选短期对 grip 影响小)。
+    若诊断显示物体动力学主导, 升级为 F_θ(s, a_chunk, B) 网络外推。
+    """
+    from swdp.success_model import featurize
+
+    def selector(a_cands, ctx):
+        obs = ctx["obs"]
+        if scene == "pick-place-v3":
+            hand, grip, puck, goal = obs[:3], obs[3], obs[4:7], obs[-3:]
+        else:
+            return 0
+        R = min(rt.resample, a_cands.shape[1])
+        a_den = a_cands[:, :R, :3].cpu().numpy() \
+            * rt.act_std[:3] + rt.act_mean[:3]
+        disp = a_den.sum(axis=1) * action_scale * follow    # [N, 3]
+        hands = hand[None, :] + disp
+        if grip < 0.5:            # 携物: 物体跟手
+            pucks = puck[None, :] + disp
+        else:
+            pucks = np.broadcast_to(puck[None, :], disp.shape)
+        onehot = ctx["s_to"][0].cpu().numpy()               # 后继技能 B
+        probs = np.array([
+            float(fb.predict(featurize(h, grip, p, goal), onehot))
+            for h, p in zip(hands, pucks)])
+        E = np.asarray(ctx["cand_energies"], dtype=np.float64)
+        E_n = (E - E.min()) / (np.ptp(E) + 1e-9)            # [0,1] 归一化
+        scores = probs - lam_r * E_n
+        ctx["fb_probs"] = probs.tolist()
+        return int(np.argmax(scores))
+
+    return selector
+
+
 @torch.no_grad()
 def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
             lam=1.0, n_noise=1, use_mask=True, use_proj=False, mask_width=4,
-            n_ddim=24, resample=8, seed=0):
-    """执行一个技能序列, 返回指标字典。
+            n_ddim=24, resample=8, seed=0, n_candidates=1, selector="first",
+            fb=None, lam_r=0.1, switch_policy="fixed", timeout_factor=1.5,
+            min_steps_ratio=0.5):
+    """执行一个技能序列, 返回指标字典(统一走 ChainExecutor 执行层)。
 
     setup: 脚本前置技能序列(建立首个技能的前置状态, 不计分)。
+    n_candidates>1: 边界处批量采样候选(selector: first/random/fb 回调)。
+    switch_policy: fixed(主协议) / criterion(C4 切换触发消融臂)。
     """
     env = make_env(scene, seed=1000 + seed)
     obs, info = env.reset()
@@ -112,106 +160,56 @@ def rollout(dp, scene, seq, skill_steps, mode, setup=None, tau=0.9, delta=0.15,
             for _ in range(SETUP_STEPS[p]):
                 obs, *_ = env.step(ctrl.act(obs))
     with h5py.File(os.path.join(DATA_DIR, f"{scene}.h5"), "r") as f:
-        obs_mean = f["obs_mean"][:]; obs_std = f["obs_std"][:]
-        act_mean = f["act_mean"][:]; act_std = f["act_std"][:]
+        norm = (f["obs_mean"][:], f["obs_std"][:],
+                f["act_mean"][:], f["act_std"][:])
     skill_ids = {n: i for i, n in enumerate(SKILL_NAMES[scene])}
+    name_of = {i: n for n, i in skill_ids.items()}
+    sid_seq = [skill_ids[n] for n in seq]
 
-    def norm_obs(o):
-        return torch.from_numpy((o - obs_mean) / obs_std).float().to(DEVICE).unsqueeze(0)
+    rt = SkillRuntime(dp, norm, device=DEVICE, n_ddim=n_ddim,
+                      resample=resample)
+    sel = selector
+    if selector == "fb":
+        assert fb is not None, "--selector fb 需要 --fb_path"
+        sel = make_fb_selector(fb, rt, scene, lam_r=lam_r)
+    spec = TransitionSpec(mode=mode, tau=tau, delta=delta, lam=lam,
+                          n_noise=n_noise, use_mask=use_mask,
+                          mask_width=mask_width, use_proj=use_proj,
+                          x0_space=X0_SPACE, n_candidates=n_candidates,
+                          selector=sel)
 
-    def onehot(i):
-        z = np.zeros((1, dp.n_skills), dtype=np.float32)
-        z[0, i] = 1.0
-        return torch.from_numpy(z).to(DEVICE)
+    def done_fn(si, env_, obs_, info_):
+        return skill_success(scene, seq[si], env_, obs_, info_)
 
-    def sample_chunk(o, s_id):
-        a = dp.sample(o, onehot(s_id), n_steps=n_ddim, seed=None)  # [1,H,D] 归一化
-        return a
+    def on_boundary(ctx):
+        # 理论闭环: 边界锚点 Lipschitz(与旧实现同位同参)
+        a, b = ctx["pair"]
+        ctx["lips"].append(dict(
+            pair=f"{name_of[a]}->{name_of[b]}",
+            L_from=est_lipschitz(dp, ctx["anchor"], ctx["o_t"],
+                                 ctx["s_from"]),
+            L_to=est_lipschitz(dp, ctx["anchor"], ctx["o_t"],
+                               ctx["s_to"])))
 
-    nfe = 0
-    total_steps = sum(skill_steps)
-    cur_skill_idx = 0
-    chunk = sample_chunk(norm_obs(obs), skill_ids[seq[0]])
-    nfe += n_ddim
-    step_in_chunk = 0
-    step_in_skill = 0
-    energies = []
-    jerks = []
-    exec_actions = []
-    per_skill_succ = {}
-    oos_shifts = []
-    lips_vals = []
-    last_obs = obs
+    ex = ChainExecutor(rt, spec, skill_done_fn=done_fn,
+                       on_boundary=on_boundary, switch_policy=switch_policy,
+                       timeout_factor=timeout_factor,
+                       min_steps_ratio=min_steps_ratio)
+    out = ex.run(env, obs, sid_seq, list(skill_steps), seed=seed)
+    env.close()
 
-    for t in range(total_steps):
-        # 技能边界检查
-        if t > 0 and step_in_skill >= skill_steps[cur_skill_idx]:
-            cur_skill_idx += 1
-            step_in_skill = 0
-            s_from = onehot(skill_ids[seq[cur_skill_idx - 1]])
-            s_to = onehot(skill_ids[seq[cur_skill_idx]])
-            o_t = norm_obs(obs)
-            # OOS 代理: 边界处观测变化幅度
-            oos_shifts.append(float(np.abs(obs - last_obs).max()))
-            # 交接锚点 = 以当前观测重新采样的 s_from 动作块(当前计划),
-            # 传输后从块首重新执行(对应 ChordEdit「编辑当前计划」语义)。
-            anchor = sample_chunk(o_t, skill_ids[seq[cur_skill_idx - 1]])
-            nfe += n_ddim
-            # 理论闭环: 边界锚点 Lipschitz
-            lips_vals.append(dict(
-                pair=f"{seq[cur_skill_idx-1]}->{seq[cur_skill_idx]}",
-                L_from=est_lipschitz(dp, anchor, o_t, s_from),
-                L_to=est_lipschitz(dp, anchor, o_t, s_to)))
-            # 传输
-            mask = cc.temporal_mask(anchor.shape[1], 0, mask_width, DEVICE) if use_mask else None
-            a_new, info_t = cc.switch(dp, o_t, anchor, s_from, s_to, tau, delta,
-                                      lam, n_noise, mode, mask, use_proj,
-                                      seed=seed + t, x0_space=X0_SPACE)
-            nfe += (2 if mode in ("chord",) else 1) * n_noise
-            if mode == "chord_recon":
-                nfe += 2 * n_noise  # 两个时刻各一次条件差查询
-            # 记录传输场能量
-            energies.append(info_t["energy"])
-            chunk = a_new
-            step_in_chunk = 0
-
-        # 执行当前块的首个动作
-        a_raw = (chunk[0, step_in_chunk].cpu().numpy() * act_std) + act_mean
-        a_raw = np.clip(a_raw, -1.0, 1.0)
-        exec_actions.append(a_raw)
-        obs, rew, term, trunc, info = env.step(a_raw)
-        nfe += 0
-        step_in_chunk += 1
-        step_in_skill += 1
-        if t < total_steps - 1:
-            last_obs = obs
-
-        # 块耗尽 -> 重采样
-        if step_in_chunk >= chunk.shape[1]:
-            chunk = sample_chunk(norm_obs(obs), skill_ids[seq[cur_skill_idx]])
-            nfe += n_ddim
-            step_in_chunk = 0
-        # 步长推进: 每 resample 步重新采样(窗口前移)
-        if step_in_chunk >= resample:
-            chunk = sample_chunk(norm_obs(obs), skill_ids[seq[cur_skill_idx]])
-            nfe += n_ddim
-            step_in_chunk = 0
-
-        # 技能结束时判定成功
-        if step_in_skill >= skill_steps[cur_skill_idx]:
-            per_skill_succ[seq[cur_skill_idx]] = skill_success(
-                scene, seq[cur_skill_idx], env, obs, info)
-
-    exec_actions = np.array(exec_actions)
+    exec_actions = out["exec_actions"]
     _e = np.sum(np.diff(exec_actions, axis=0) ** 2, axis=1)
     energy = float(np.median(_e)) if len(_e) else 0.0
-    jerk = float(np.max(np.abs(np.diff(exec_actions, n=2, axis=0)))) if len(exec_actions) > 2 else 0.0
-    e2e = float(all(per_skill_succ.get(s, 0.0) > 0.5 for s in seq))
-    env.close()
+    jerk = float(np.max(np.abs(np.diff(exec_actions, n=2, axis=0)))) \
+        if len(exec_actions) > 2 else 0.0
+    per_skill = {name_of[k]: v for k, v in out["per_skill"].items()}
+    e2e = float(all(per_skill.get(s, 0.0) > 0.5 for s in seq))
+    oos_list = out["ctx"]["oos"]
     return dict(
-        seq=seq, per_skill=per_skill_succ, e2e=e2e, energy=energy, jerk=jerk,
-        nfe=nfe, oos=max(oos_shifts) if oos_shifts else 0.0,
-        lips=lips_vals, boundary_energy=energies)
+        seq=seq, per_skill=per_skill, e2e=e2e, energy=energy, jerk=jerk,
+        nfe=out["nfe"], oos=max(oos_list) if oos_list else 0.0,
+        lips=out["ctx"]["lips"], boundary_energy=out["energies"])
 
 
 SKILL_NAMES = {
@@ -238,6 +236,19 @@ def main():
     ap.add_argument("--n_ddim", type=int, default=24)
     ap.add_argument("--cd", action="store_true",
                     help="使用一致性蒸馏学生模型(x0 空间残差场, B_t≡I)")
+    ap.add_argument("--n_candidates", type=int, default=1,
+                    help="边界处候选数(>1 启用 Candidate Reranking)")
+    ap.add_argument("--selector", default="first",
+                    choices=["first", "random", "fb"])
+    ap.add_argument("--fb_path", default="",
+                    help="F_B 模型路径(--selector fb 时必填)")
+    ap.add_argument("--lam_r", type=float, default=0.1,
+                    help="候选能量惩罚系数 λ_r")
+    ap.add_argument("--switch_policy", default="fixed",
+                    choices=["fixed", "criterion"],
+                    help="切换触发: fixed(主协议) / criterion(C4 消融)")
+    ap.add_argument("--timeout_factor", type=float, default=1.5)
+    ap.add_argument("--min_steps_ratio", type=float, default=0.5)
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -252,6 +263,12 @@ def main():
         dp = SkillDP.load(os.path.join(MODEL_DIR, f"dp_{args.scene}.pt"), DEVICE)
         X0_SPACE = False
     dp.eval()
+    fb = None
+    if args.selector == "fb":
+        from swdp.success_model import load as fb_load
+        fb, _ = fb_load(args.fb_path or os.path.join(
+            MODEL_DIR, f"fb_{args.scene}.pt"), DEVICE)
+        fb.eval()
     tasks = TASKS[args.scene]
     results = []
     for seq, setup, skill_steps, kind in tasks:
@@ -264,7 +281,11 @@ def main():
                         setup=setup, tau=args.tau, delta=args.delta, lam=args.lam,
                         n_noise=args.n_noise, use_mask=args.use_mask,
                         use_proj=args.use_proj, n_ddim=args.n_ddim,
-                        seed=ep * 7 + 1)
+                        seed=ep * 7 + 1, n_candidates=args.n_candidates,
+                        selector=args.selector, fb=fb, lam_r=args.lam_r,
+                        switch_policy=args.switch_policy,
+                        timeout_factor=args.timeout_factor,
+                        min_steps_ratio=args.min_steps_ratio)
             r["latency_s"] = time.time() - t0
             r["kind"] = kind
             succ.append(r)
@@ -283,6 +304,10 @@ def main():
         tag += "_mask"
     if args.use_proj:
         tag += "_proj"
+    if args.n_candidates > 1:
+        tag += f"_cand{args.n_candidates}{args.selector}"
+    if args.switch_policy != "fixed":
+        tag += f"_{args.switch_policy}"
     out_path = os.path.join(DATA_DIR, "../eval", f"{tag}.json")
     with open(out_path, "w") as f:
         json.dump(dict(args=vars(args), results=results), f, indent=2,

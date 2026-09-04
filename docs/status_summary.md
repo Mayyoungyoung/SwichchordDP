@@ -44,6 +44,28 @@ Chord 时间平滑、场能量风险信号驱动的恢复闭环。对标 ChordEd
 λ=0.5 时分离度最大（0.542 vs 0.458，+8.4 分）——符合「naive 先于 chord 失稳」的理论预测。
 **unseen 组合**：grasp→carry 0.19-0.42、lift→place 0.11-0.25、place 单独 1.0（免训组合能力证据）。
 
+**第五/六轮迭代（2026-09-04，详见 experiment_report §11-§12）**：
+- **衔接分水岭诊断（SENSITIVE）**：4 边界×752 状态实证「终态差异强烈决定 B 成功率」
+  （carry→place 的 eef_offset 1.0→0.12 平滑单调退化；真实链边界散布与退化区重叠）；
+- **F_B 预测器**：19 维几何特征 + 技能 one-hot 小 MLP，CV AUC 0.879 / ECE 0.068；
+- **六臂候选消融（负结果+定位）**：8 候选重排序无增益（random≈chord，fb≤chord）
+  ——根因是 8 步外推窗口内候选间 F_B 概率平坦（物理纠正域），F_B 的正确用法是
+  大状态差异决策（恢复重规划/提前切换），非单边界微选择；
+- **切捖触发消融**：criterion 提前切捖 5 链崩塌（0.042）、短链 unseen 受益，fixed 为主协议。
+- **第七轮：Terminal-State Diversity 决策链（2026-09-04）**：240 回合自然
+  合法终态（carry→place）× place 10 rollouts，修复 restore 协议 bug 后 P_emp=
+  **0.974±0.06**（80% 状态=1.0）——**合法 A 终态对 B 几乎无影响**；§11 的敏感曲线
+  属 OOD 大扰动区（A 失败后的 recovery 领域）。**Future-Aware C2 路线证伪并停止**，
+  F_B 重定位为 recovery 的跨技能决策信号（C3），D 阶段（Recovery-aware 增广）优先级上升。
+- **第八轮：三对泛化检验 + 劣质抓取发现（2026-09-04）**：代码审查修正
+  （DP 链 setup / bootstrap 配对 / 计数重置）后泛化到三对：carry→place 0.972 /
+  reach→grasp 0.990（位置型 No-Go 确认）；**grasp→lift 0.913±0.275 出现真实差异**—
+  8.3% 的语义合法但物理劣质抓取（grip 过度闭合 0.29 vs 正常 0.44 + 偏心 0.028 vs
+  0.005，特征空间线性可分）→ lift 全败，与主表 lift per_skill=0.729 第一失败点
+  互证。F_B v2（该对自然数据训练）FB_gap +0.42/Spearman +0.46 可识别。
+  **最终条件性结论**：C2 终态选择正式关闭；劣质抓取检测→regrasp 归入 C3
+  （可挽回 ~8% e2e，与 carry 0.88 同量级）。
+
 **关键历史**：第三轮审计修复 B_t 符号 bug（A_t^(ε) = −γ_max/(2σ)，原代码正号把传输场方向
 整个反掉）后，5 链 0.25 → 0.64——**此前所有绝对值都被低估**，修复后整套机制才按设计工作。
 
@@ -148,10 +170,12 @@ Chord 时间平滑、场能量风险信号驱动的恢复闭环。对标 ChordEd
 2. **先拿「技能进度」当主指标迭代**（BDDL e2e 太稀疏）：进度 ≥0.6 的任务优先进入
    在线 chord vs naive 对比。
 
-### P1：主表统计口径加固
+### P1：主表统计口径加固（✅ 2026-09-04 完成）
 
-3. 头条对比（chord/naive/chord_recon）单组 **120 回合**，报告配对检验与逐回合明细；
-   固定种子集声明（消除「前 24 回合偏易」类问题）。
+3. ~~头条对比（chord/naive/chord_recon）单组 **120 回合**，报告配对检验与逐回合明细；
+   固定种子集声明~~ → 已完成：48 回合回归 bit 级复现 + 六臂 144 配对回合 McNemar 检验
+   + 逐回合明细（experiment_report §11.3/§12.3，`arm_analysis.py`）；种子协议固定
+   seed=ep·7+1 已声明。
 4. 补齐 ±投影、±掩码、n_ddim∈{8,16} 消融在新口径下的复测。
 
 ### P2：恢复闭环补齐
@@ -175,9 +199,11 @@ Chord 时间平滑、场能量风险信号驱动的恢复闭环。对标 ChordEd
 
 ## 5. 交付物清单
 
-- 代码：`code/swdp/`（chord_compose 5 模式、nets、distil、policy、policy_image、feasibility、planner）、
-  `code/metaworld/`（训练/评测/恢复/诊断 10+ 脚本）、`code/libero/`（重放/训练/在线评测/CF/图像版全套）
-- 数据/模型：`results/metaworld/`（5 技能模型、学生、30+ 评测 json）、
+- 代码：`code/swdp/`（chord_compose 5 模式、nets、distil、policy、policy_image、feasibility、planner、
+  **harness（ChainExecutor 统一执行层）、success_model（F_B）**）、
+  `code/metaworld/`（训练/评测/恢复/诊断 10+ 脚本、**diag_handoff（分水岭诊断）、arm_analysis（六臂配对）**）、
+  `code/libero/`（重放/训练/在线评测/CF/图像版全套）
+- 数据/模型：`results/metaworld/`（5 技能模型、学生、**F_B 模型+校准图**、30+ 评测 json）、
   `results/libero/`（重放 h5×10、每任务状态 DP、图像 DP×10、评测 json）
-- 文档：SWDP.md v3、survey.md、design_optimization.md、theory_composability.md、experiment_report.md（§1-§10）
+- 文档：SWDP.md v4、survey.md、design_optimization.md、theory_composability.md、experiment_report.md（§1-§12）
 - 全部已推送 git@github.com:Mayyoungyoung/SwichchordDP.git

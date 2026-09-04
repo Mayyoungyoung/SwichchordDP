@@ -1,6 +1,7 @@
 # Idea 9 技术方案:面向长程具身智能的工具对齐组合框架(免训 Chord 交接)
 
-> 状态:方案设计 v3(2026-09-03 修订;新增 TAPT/HELM 调研对照与「规划-组合」双层框架设计,见 docs/design_optimization.md)
+> 状态:方案设计 v4(2026-09-04 修订;贡献重组为 C1/C2/C3 三支柱 + Harness 层架构,实验依据见 docs/experiment_report.md §11-§12)
+> v3(2026-09-03):TAPT/HELM 调研对照与「规划-组合」双层框架设计,见 docs/design_optimization.md
 > 参考:ChordEdit(arXiv:2602.19083v2,已精读含附录);TAPT/Tool-Aligned VLA(arXiv:2605.13119);HELM/Harness VLA(arXiv:2604.18791)
 > 定位:交叉「扩散 + 具身 + 免训 + 长程智能体」,把 ChordEdit 的低能传输场升级为**工具调用的免训交接层**,与 Idea 1 共享「最优传输场」工具,故事递进
 
@@ -9,6 +10,24 @@
 ## 0. 一句话总结
 
 把 ChordEdit 的「Chord 控制场」从图像潜在空间平移到动作块空间,并把它重新定位为**长程智能体工具调用的免训交接层**:高层 VLM 按 TAPT 式接口输出调用序列 `{(g_k, z_k)}`(工具家族 g + 场景接地指令 z),低层 ChordCompose 在**冻结的工具条件扩散策略/VLA**上完成 Switch / Chain / Combine 三种免训组合;交接场能量 ‖û‖² 作为免训的风险信号驱动事件式重规划(对应 TAPT 进度反馈与 HELM 验证器)。理论部分继承 ChordEdit 能量收缩与截断误差框架,新增**工具语义条件场、工具对组合稳定性条件、可行性投影稳定性**三个理论增量;相对 ChordEdit 的新增是**工具语义条件、物理可行性投影**与**时间掩码**。
+
+**v4 贡献重组(实验支撑:分水岭诊断 + 六臂消融, 2026-09-04)**——系统层三支柱:
+
+- **C1 Chord Field(怎么过渡)**:免训衔接算子(本文核心),边界场能量 3×收缩 +
+  chord vs naive +6.2 分一致性优势;
+- **C2 Future-Aware Selection(过渡到哪)**:F_B(s, B) 轻量成功预测器作为调度信号。
+  三对泛化实证(2026-09-04):**位置型技能对(carry→place 0.972 / reach→grasp 0.990)
+  合法终态对 B 几乎无影响, 终态选择路线正式关闭**;唯一有差异的 grasp→lift
+  (0.913, 劣质抓取亚域)本质是检测-恢复问题而非选择问题——归入 C3;
+- **C3 Risk-aware Recovery(何时恢复)**:场能量尖峰 → 事件式重规划;F_B(目标分布
+  自然数据训练)作为劣质状态检测器——实证:8.3% 语义合法但物理劣质抓取(grip 过度
+  闭合+偏心, 线性可分)→ lift 全败, 检测+regrasp 可挽回 ~8% e2e(下一步)。
+
+**架构定位(vs Harness VLA)**:同为「冻结执行器 + 系统层调度」路线;差异在
+HELM 靠 Agentic Planner + 执行记忆学习调度,SWDP 的衔接算子(Chord)免训、
+调度信号(F_B)是轻量预测器——总训练量 << 学习式 harness,可作为其衔接层
+替代件。实现层:`code/swdp/harness.py` 的 ChainExecutor(on_boundary/
+on_skill_end/on_risk 三钩子)是三支柱的统一接入点。
 
 ---
 
@@ -274,3 +293,21 @@ ChordEdit 附录 D/E 的定理把状态空间从图像潜在换成动作块后**
   图像 CNN-DP 试点(同任务对照: 状态 0.42 / 无增广图像 0.25 / **增广+60k 图像 0.62**;
   从零 CNN 是杠杆, 但必须配平移增广+足够迭代, 已扩至全 10 任务)。
 - v3 修订要点(2026-09-03,见 [docs/design_optimization.md](docs/design_optimization.md)):调研 TAPT(arXiv:2605.13119)与 HELM(arXiv:2604.18791),方案升级为「规划-组合」双层框架;条件从 one-hot 技能升级为工具调用 (g,z) 语义嵌入;新增场能量风险信号与事件式重规划;定理 2 语义化为工具对组合稳定性条件;验证方案对标 LIBERO-Long 在线/CF-Long 忠实度/HELM 式恢复评测。
+- v4 修订要点(2026-09-04,见 [docs/experiment_report.md](docs/experiment_report.md) §11-§12):
+  ①衔接分水岭诊断(4 边界×752 状态, SENSITIVE: eef_offset 1.0→0.12 平滑退化, 真实散布与退化区重叠);
+  ②Harness 层架构落地(`code/swdp/harness.py` ChainExecutor 三钩子, 三脚本迁移 48 回合 bit 级回归);
+  ③F_B 预测器(CV AUC 0.879/ECE 0.068);
+  ④六臂候选消融负结果: 单边界候选微选择无效(概率平坦根因), F_B 定位为大状态差异决策信号;
+  ⑤切捖触发消融: criterion 崩塌(0.042)但短链受益, fixed 主协议。贡献重组为 C1/C2/C3 三支柱。
+- v4.1(2026-09-04 决策链, 见 [docs/experiment_report.md](docs/experiment_report.md) §13):
+  Terminal-State Diversity 决策链完成——修复 restore 协议 bug 后自然合法终态(carry→place,
+  220 状态×10 rollouts)P_emp=**0.974±0.06**, 「合法 A 终态显著决定 B」不成立(No-Go);
+  §11 的敏感曲线属 OOD 大扰动区(A 失败后 recovery 领域);**Future-Aware C2 证伪停止**,
+  F_B 重定位为 C3 的跨技能重规划信号, D 阶段(Recovery-aware 增广)优先级上升。
+- v4.2(2026-09-04 三对泛化, 见 §13.4-13.6): 代码审查修正后(DP 链 setup/bootstrap 配对)
+  泛化到三对: carry→place 0.972 / reach→grasp 0.990(位置型 No-Go 确认,
+  **C2 终态选择正式关闭**); **grasp→lift 0.913±0.275 出现真实差异**——8.3% 的
+  语义合法但物理劣质抓取(grip 过度闭合+偏心, 线性可分)→ lift 全败, 与主表
+  lift per_skill=0.729 第一失败点互证; F_B v2(该对自然数据) FB_gap +0.42 可识别。
+  劣质抓取检测→regrasp 归入 C3(可挽回 ~8% e2e)。F_B 最终定位: 劣质状态检测器
+  (必须用目标分布自然数据训练, 诊断扰动数据不覆盖抓取质量维度)。
