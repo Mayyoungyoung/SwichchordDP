@@ -265,6 +265,9 @@ def main():
     dp.eval()
     fb = None
     if args.selector == "fb":
+        # 注意: fb_{scene}.pt 是 v1 诊断扰动数据模型，已知在自然终态分布上
+        # 无预测力(Spearman n.s., §13.2)——仅用于复现 §12 六臂消融，
+        # 勿用于新实验(新实验用 ready_poc.py 的 ensemble)。
         from swdp.success_model import load as fb_load
         fb, _ = fb_load(args.fb_path or os.path.join(
             MODEL_DIR, f"fb_{args.scene}.pt"), DEVICE)

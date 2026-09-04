@@ -1,4 +1,8 @@
-"""F_B-guided A-tail 实验(决策链第三问的主动引导方案)。
+"""[DEPRECATED 2026-09-04] F_B-guided A-tail 实验。
+
+⚠️ 本实验建立在第七轮 termdiv 初版 bug 数据之上，结果已作废
+（experiment_report.md §13.3）。且其 F_B v2 模型基于修复前伪象数据训练。
+保留仅供历史记录；新框架的修复实验见 ready_poc.py（READY Phase 1）。
 
 背景: Reachability 显示被动尾部采样 ΔF_B=+0.022(显著但效应小) —— 冻结 DP
 尾部自由度不足, 需主动引导。此处实现建议 2 的路线 B(Foresight Guidance 简化版):

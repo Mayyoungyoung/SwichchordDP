@@ -1,4 +1,8 @@
-"""Reachability / Controllability 实验(决策链第三问: 高 F_B 终态可达吗?)。
+"""[DEPRECATED 2026-09-04] Reachability / Controllability 实验。
+
+⚠️ 本实验建立在第七轮 termdiv 初版 bug 数据（rollout 未 restore 终态）之上，
+结果已作废（experiment_report.md §13.3）。保留仅供历史记录；新框架下的
+可达性验证见 ready_poc.py（READY Phase 1）。
 
 RQ: frozen DP carry 的原始执行产生什么 F_B 分布? A-tail(尾部最后 H=10 步
 不同采样)能否显著产生更高 F_B 的终态?

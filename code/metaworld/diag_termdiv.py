@@ -60,6 +60,8 @@ PAIRS = {
                          settle_grip=0.0),
     "grasp->lift": dict(a="grasp", b="lift", setup=["reach"],
                         settle_grip=1.0),
+    "lift->carry": dict(a="lift", b="carry", setup=["reach", "grasp"],
+                        settle_grip=1.0),
 }
 # 各技能步数(与 eval_compose 5 链 [30,25,25,30,20] 一致)
 SKILL_STEPS = {"reach": 30, "grasp": 30, "lift": 25, "carry": 30, "place": 20}
@@ -114,6 +116,11 @@ def valid_A(cfg, env, obs):
         succ = (float(o["grip"]) < 0.75 and
                 np.linalg.norm(o["hand"][:2] - o["puck"][:2]) < 0.04 and
                 np.linalg.norm(o["hand"] - o["puck"]) < 0.10)
+    elif a == "lift":
+        # 语义成功(物体被举起) ∧ 物在手中(质量谓词)
+        succ = (float(o["puck"][2]) > 0.08 and
+                float(o["grip"]) < 0.6 and
+                np.linalg.norm(o["hand"] - o["puck"]) < 0.10)
     elif a == "reach":
         succ = (np.linalg.norm(o["hand"][:2] - o["puck"][:2]) < 0.03 and
                 float(o["grip"]) > 0.8)
@@ -136,7 +143,6 @@ def valid_A(cfg, env, obs):
         return bool(v_lin_obj < 0.3 and in_limit)
     # reach: 物体仍在桌面原位且静止(未被扰动)
     return bool(puck_z < 0.06 and v_lin_obj < 0.05 and in_limit)
-
 
 def settle(env, n_steps=20, grip=1.0):
     """技能结束后 settle(grip 动作按技能配置: 持物 +1 / 空手 0)。
@@ -409,6 +415,8 @@ def main():
     ap.add_argument("--n_episodes", type=int, default=240)
     ap.add_argument("--k", type=int, default=K_ROLLOUT,
                     help="每终态 B rollout 次数")
+    ap.add_argument("--seed0", type=int, default=1000,
+                    help="collect 起始 env seed(扩样用新 seed 段)")
     ap.add_argument("--out", default="")
     args = ap.parse_args()
 
@@ -424,7 +432,8 @@ def main():
     states, rows, stats_c = None, None, None
     if args.cmd in ("collect", "all"):
         states, rows, stats_c = collect(dp, norm, cfg,
-                                        n_episodes=args.n_episodes)
+                                        n_episodes=args.n_episodes,
+                                        seed0=args.seed0)
         np.savez_compressed(base + "_states.npz", states=states)
         with open(base + "_collect.json", "w") as f:
             json.dump(dict(stats=stats_c, rows=rows), f, indent=2)

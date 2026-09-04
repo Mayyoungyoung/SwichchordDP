@@ -1,4 +1,9 @@
-"""F_B v2 修复实验: 诊断 F_B 在自然终态分布上反号(Spearman -0.39)的根因修复。
+"""[PARTIALLY DEPRECATED 2026-09-04] F_B v2 修复实验。
+
+⚠️ 注意: 本脚本训练的 fb_pick-place-v3_v2.pt 基于第七轮 termdiv 初版 bug
+数据（P_emp 双峰伪象），该模型已作废（数据修复后 P_emp=0.974 无信号）。
+脚本本身的「Bernoulli 展开 + 按状态聚合评估」协议仍然有效，
+ready_poc.py 的 train_ensemble 沿用此协议（改用修复后数据）。
 
 根因: 诊断训练数据扰动只在 xy 方向, 自然终态的真实成败驱动是 z 高度
 (goal z 任务差异, rho=-0.47)。修复: 用 termdiv 自然分布数据(220 状态 × 10
