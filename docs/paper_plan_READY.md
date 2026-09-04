@@ -1,9 +1,11 @@
 # 论文方案：Beyond Nominal Success — Policy-Ready Handoffs between Frozen Robot Skills
 
-> 版本 v1.0（2026-09-04，第九轮方案定稿）
-> 状态：方案收敛，Phase 0/1 实验启动
-> 前序依据：experiment_report.md §11-§13（分水岭诊断 → 六臂消融 → Terminal-State
-> Diversity 三对泛化 → grasp→lift 劣质抓取亚域发现）
+> 版本 v2.0（2026-09-04，第十轮路线修订：主路线从「事后修复 READY」切换为
+> 「事前塑造 Downstream-Compatible Skill Learning」）
+> v1.0 的 READY(CEM 修复)已在 Phase 1 五臂 PoC 被双重证伪
+> （critic 对抗失效 + 执行器 OOD，见 experiment_report.md §14），
+> Correction 模块整体废弃；Detection 成果保留为方法的核心组件。
+> 前序依据：experiment_report.md §11-§14。
 
 ---
 
@@ -44,63 +46,46 @@ does not guarantee downstream executability?*
 | 观测失配 | 物理可移但后继视觉 DP OOD | 观测接口适配/重规划 | limitations |
 | 语义/计划失配 | 修复会撤销前序目标 | 不修复，高层 replan | 三路决策之一 |
 
-## 3. 方法框架：READY（三阶段闭环）
+## 3. 方法框架（v2.0 修订：Downstream-Compatible Skill Learning）
 
-**方法名候选**：READY（**Re**pair via successor critics for policy-re**ADY**
-handoffs）主投 AAAI/ICLR；SGR / HandoffGuard 备选。
+### 3.0 路线决策（第十轮，基于 §14 负结果）
 
-```
-Agent: [grasp] → [lift] → [carry] → [place]        (高层只选序列)
-              │
-              ▼ 每条边上：
-     Handoff Manager (i → j)
-     1. Evaluate LCB_δ(s_i, j)          ← Diagnosis
-     2. Ready      → execute π_j
-     3. Repairable → CEM repair (RH 执行) ← Correction
-     4. 不可修复  → escalate 失败签名给高层重规划
-```
+零策略适应的修复（CEM/重执行/预算扩展）被系统性证伪——修复需要闭环执行
+能力，冻结 DP 库不具备。主路线切换为**训练时塑造上游终态分布**：
 
-### 3.1 Diagnosis：Successor Critic + LCB 门控
+> **一个技能的「成功终态」并不唯一；不同成功终态对后续技能的可执行性不同。
+> 能否利用下游技能的可行性，反向塑造上游技能的终态分布？**
 
-- \(V_j(s)\)：19 维几何特征 + 技能 one-hot 小 MLP（已有 success_model.py 基建）；
-- **训练数据来源（关键卖点）—— composability probing**：冻结技能互探
-  （π_i 自然执行产生终态 → π_j rollout × K 取 outcome），自监督零标注，
-  每对 ~240 回合 ≈ 30 分钟仿真；
-- ensemble M=5 折 → \(\bar{V}_j, \sigma_j\)，门控用
-  \(\mathrm{LCB}_\delta(s) = \bar{V}_j(s) - \kappa\sigma_j(s)\)；
-- **训练分布教训（两次验证，§12-§13）**：必须用目标分布自然数据训练
-  （诊断扰动数据不覆盖抓取质量维度）。
+优点：不需 recovery policy / CEM / runtime planner；与 DP 天然兼容；
+直接利用已有数据；避开 §14 的双重失效根因（分布内加权而非外推搜索）。
 
-### 3.2 Correction：不变量约束的动作序列搜索（统一 formulation）
+### 3.1 方法：Trajectory Reweighting（非 ∇F_B 引导）
 
-$$a^*_{1:H} = \arg\min_{a_{1:H}} C(a_{1:H}; s) \quad \text{s.t.}\quad
-\mathrm{LCB}_\delta(\hat{s}_H) \ge \tau,\;\; \mathcal{I}(\hat{s}_H)=\mathcal{I}(s),\;\; \hat{s}_t \in \mathcal{S}_{safe}$$
+$$
+\mathcal L = \mathcal L_{DP} + \lambda\,\mathcal L_{DC},
+\qquad
+w(s^+) = 1 + \lambda\, F_B(s^+)
+$$
 
-- 搜索空间恒为 **short-horizon action sequence**（H=10），跨 failure mode
-  不换 formulation——regrasp 只是 \(a^*\) 恰好表现为重抓的实例；
-- 求解：CEM（population 64 × 5 代）在 MuJoCo roll-forward 上；
-- 任务不变量 \(\mathcal{I}\)：物体在手中、高度、关节限位（physics-valid 已有实现）；
-- 执行：receding-horizon（每次执行 1-2 步重观测 re-gate），与 DP chunked
-  执行哲学一致；PoC 先全序列，RH 做消融。
+- 对上游技能轨迹按**终态下游可行性**加权（trajectory-level → step-level 广播）；
+- 三个版本（实验设计）：
+  1. **Outcome-weighted**（上界）：w = 1+λy（y=下游真实 rollout outcome）；
+  2. **Feasibility-guided**（正式方法）：w = 1+λF_B(s⁺)（连续可行性）；
+  3. **Quality-weighted**（对照基线）：w = 1+λ·grasp 自身质量（对中+闭合度）——
+     证明「下游可行性」优于「当前技能质量」；
+- **关键设计**：用 distribution 内 reweighting 而非 ∇_s F_B 或 CEM argmax——
+  直接规避 §14 的 critic 对抗失效。
 
-### 3.3 与 Chord 的统一（理论主线）
+### 3.2 与 Chord 的统一
 
-两个模块都是**冻结 DP 上的 test-time operator，作用空间不同**：
-
-| | Chord（已有） | Repair（新增） |
+| 层 | 不兼容类型 | 算子 |
 |---|---|---|
-| 作用空间 | 动作空间 | 状态空间 |
-| 利用的结构 | score 网络（技能条件间 eps-残差场，能量 3×↓） | outcome landscape（successor critic） |
-| 算子性质 | 免训解析算子（已有定理 1-3） | 搜索算子（约束保持） |
-| 回答 | how to hand off | whether & where to hand off |
+| Action Compatibility | 切换动作不连续 | Chord（免训传输场，已有） |
+| Terminal-State Compatibility | 终态不被后继可执行 | F_B 判别 + 上游终态分布塑造（新） |
 
-统一表述：**Test-time composition = action-space transition operator ⊕
-state-space diagnosis/repair operator**，二者只读取冻结生成模型的结构，
-零 policy adaptation。（NeurIPS 版可深化为统一能量视角
-\(E_{total} = E_{chord} + \lambda E_{feasibility}\)。）
+### 3.3 [废弃] READY 事后修复模块
 
-训练时方向（backward fine-tuning）不进主论文——与 Sequential Dexterity
-正面撞车且违背 frozen 设定；discussion 一句话正交性声明。
+CEM-on-V repair / release+re-execute / budget extension 全部废弃（§14 实证）。
 
 ## 4. 相关工作定位（检索核实后的对照）
 
@@ -115,35 +100,24 @@ state-space diagnosis/repair operator**，二者只读取冻结生成模型的�
 | RoboHarness (2026) | 编排层；我们是每条边上的交接组件，可插拔 |
 | PoCo / score composition 系 | 组合对象是生成组件；我们把 learned outcome landscape 当组合对象 |
 
-## 5. 实验计划（五阶段，风险递进）
+## 5. 实验计划（v2.0 修订）
 
-**Phase 0（扩样）**：grasp→lift collect 480 回合（预期 ~40 失败态）；
-lift→carry termdiv 探测第二失配对。训练 5-member ensemble \(V_{lift}\)。
+**主实验：Downstream-Compatible Skill Learning（grasp→lift，第一轮最小验证）**
 
-**Phase 1（PoC，决定性实验）**：失败态集上五臂对照——
+1. 数据（dc_collect.py）：脚本 reach + DP grasp 自然轨迹 240 条，每条带
+   lift×10 outcome 标签 y_i + grasp 质量标签 + 完整动作轨迹；
+2. 训练（dc_train.py）：从 dp_pick-place-v3.pt 微调，权重方案
+   {uniform(等权微调对照), outcome(y 加权, λ∈{1,2,4}), quality(grasp 质量
+   加权), fb(F_B 连续加权，第二轮)}；
+3. 评估（dc_eval.py）：每模型 120 次 rollout——P(grasp) / P(lift|grasp) /
+   P(e2e) / 终态 F_B 分布 / grip 分布（Pareto 图 + 分布对比图）。
 
-| 臂 | 说明 | 检验 |
-|---|---|---|
-| direct handoff | 直接 lift | 基线锚点（≈0） |
-| random action chunk | 同预算随机动作 | 排除「任何扰动都有用」 |
-| re-execute grasp | 重执行前序技能 | **关键基线**：修复收益是否只是重试？ |
-| READY repair | CEM on \(V_{lift}\) + 不变量约束 | 方法主体 |
-| oracle regrasp | 脚本完美抓取 | 上界 |
+**Go/No-Go**（用户建议的判定）：若 outcome 加权使 P(e2e) 显著上升且
+P(grasp) 无明显下降 → 升级 F_B 连续加权 + 泛化到第二对；否则此路价值
+有限，回到「现象+检测」的 empirical study。
 
-指标：lift 成功率 ×10、不变量保持率、动作代价、墙钟、修复后 LCB。
-**核心读出：READY vs re-execute-grasp 的差距** = 显式优化后继就绪超越
-盲目重试的增量。
-
-**Phase 2（诊断质量）**：AUROC/AUPRC/Brier/ECE/selective risk-coverage；
-No-Go 两对成为特异度证据（FP≈0 → 选择性计算）。
-
-**Phase 3（泛化）**：优化器/代价/阈值冻结，仅换 \(V_j\) one-hot 与状态来源；
-外加 BTM 式密度基线（验证论据 A）。
-
-**Phase 4（端到端）**：5 链 120 回合配对四臂：naive / chord / chord+gate /
-chord+gate+repair(+escalate)。预期挽回 8-10 分 e2e。
-
-**Phase 5（可选）**：密度对比全表、RH vs 全序列、LCB κ 敏感性。
+**原 READY 五阶段计划（v1.0 §5）**：Phase 0/1 已执行（§14），
+Phase 2-4 废弃（修复路线已关）。
 
 ## 6. 审稿人攻击点与应对（预案）
 
