@@ -723,3 +723,62 @@ grasp 终态分布更宽（无 settle），劣质抓取是 lift 失败的重要�
 （复现：`diag_termdiv.py --pair {carry->place|reach->grasp|grasp->lift}`；
 `termdiv_{carry_place,reach_grasp,grasp_lift}.json/.png`；F_B v2 验证
 脚本内嵌于本轮会话记录。）
+
+## 14. 第九轮（2026-09-04：READY Phase 0/1 —— 修复可行性边界的决定性实证）
+
+按 docs/paper_plan_READY.md 执行。代码审查先行（修 Phase-0 启动引号 bug、
+标注旧模块 diag_reach/diag_guided/fb_v2-v2 权重、清理垃圾重定向文件，
+commits db60f3e/8cc655a）。
+
+### 14.1 Phase 0：扩样与新对探测
+
+| 对 | kept/240 | P_emp | 失败态(p≤0.2) | 缺口性质 |
+|---|---|---|---|---|
+| grasp→lift (新 seed 段) | 230 | 0.890 | 24 | 同第八轮：劣质抓取（累计 43 失败态） |
+| lift→carry（新对） | 203 | **0.483** | 68 | **距离驱动**：puck-goal xy rho=−0.654（p=4e-26），失败态 0.246m vs 成功态 0.190m——任务难度（物体初始位置远）与 carry 能力边界混合，非纯状态劣质 |
+
+### 14.2 Phase 1：五臂 PoC（决定性负结果）
+
+grasp→lift 的 43 失败态（460 合法态训练 5-member ensemble V_lift）：
+
+| 臂 | P_lift | 说明 |
+|---|---|---|
+| direct | 0.005 | 基线锚点 |
+| random chunk | 0.007 | 扰动无效 |
+| re-execute grasp | 0.000 | 无松爪重执行无效 |
+| **READY (CEM on V)** | **0.002** | **对抗失效** |
+| oracle (松+放+脚本重抓) | 0.467 | 唯一有效，但 skill-specific |
+
+**根因双连**：
+1. **Critic 对抗失效**：CEM 修复后 V_ensemble=0.966（43/43 全 V>0.5）但实际
+   P_lift=0.002，V vs 实际 Spearman=0.062 (n.s.)——CEM 找到特征空间「V 高」
+   区域但状态是物理不一致的对抗样本（自然分布不存在的特征组合）；
+2. **执行器 OOD**：补充实验 release(松爪)+DP-regrasp=0.005——冻结 DP
+   grasp 对「手已在物体上方的落下态」OOD，无法可靠重抓。修复瓶颈在执行能力
+   而非目标选择。
+
+### 14.3 补充探针（均负）
+
+- lift→carry 失败态：re-execute lift **有害**（0.147→0.013）；
+- 预算扩展（carry 30→50 步）：无效（0.107 vs 0.093）——失败非步数不足。
+
+### 14.4 结论：冻结技能可及的修复空间实证地图
+
+| 修复机制 | 结果 | 失效根因 |
+|---|---|---|
+| 短时 CEM on critic | ✗ | 对抗样本 |
+| 原语+重执行前序 DP | ✗ | DP 对中间态 OOD |
+| 预算扩展 | ✗ | 非步数问题 |
+| 闭环脚本重抓 (oracle) | ✓ 0.467 | 需闭环执行能力（超出冻结 DP 库） |
+
+**科学结论**：检测（F_B 有效）与修复（需闭环执行器）之间存在能力鸿沟——
+「零策略适应的修复」在本任务域被系统性证伪。修复需要至少其一：
+(a) 闭环原语库（脚本，skill-specific）；(b) 轻量训练的 recovery policy
+（可从 oracle 修复轨迹构造数据）；(c) FAR 式测试时策略适应。
+
+方向决策（三选一，待定）：A) empirical study 论文（现象+检测+修复边界）；
+B) 轻量 recovery policy（从 43 失败态 + oracle 轨迹训练）；C) 分诊框架
+（检测+多响应路由，执行器用现有原语）。
+
+（复现：`ready_poc.py`（五臂）；补充探针脚本内嵌会话记录；
+`termdiv_{grasp_lift_ext,lift_carry}.json`。）
