@@ -199,7 +199,10 @@ def main():
               f"grip={results[name]['grip']['mean']:.3f}±{results[name]['grip']['std']:.3f}")
     path = os.path.join(EVAL_DIR, args.out + ".json")
     with open(path, "w") as f:
-        json.dump(dict(args=vars(args), results=results), f, indent=2)
+        # rows 逐回合记录供配对显著性检验(McNemar), 与聚合指标同源
+        json.dump(dict(args=vars(args), results=results,
+                       rows={k: v for k, v in rows_by_model.items()}),
+                  f, indent=2)
     print(f"[dc-eval] saved {path}")
 
     # Pareto 图 + 分布对比图(grip / hand-puck xy / terminal F_B)

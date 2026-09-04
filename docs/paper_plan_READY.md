@@ -116,6 +116,17 @@ CEM-on-V repair / release+re-execute / budget extension 全部废弃（§14 实�
 P(grasp) 无明显下降 → 升级 F_B 连续加权 + 泛化到第二对；否则此路价值
 有限，回到「现象+检测」的 empirical study。
 
+> **第十轮执行结果（2026-09-04，experiment_report.md §15）：NO-GO。**
+> 240 轨迹收集（y pos rate=0.970）→ 5 模型微调 → 120 回合×6 臂评估：
+> base 0.9525 / uniform 0.9558 / outcome λ=1,2 0.9600 / **λ=4 0.9683** /
+> quality 0.9600——方向性正且随 λ 单调，但 Δe2e=+0.016 未达显著
+> （McNemar 3-1 p=1.0，SE≈0.019）；P(grasp) 恒 1.0 无下降；
+> 所有微调变体的 grip 终态分布显著偏移（KS p<0.005，0.433→0.436）。
+> 根因：脚本 reach setup 下劣质抓取天然发生率仅 ~3%，加权信号质量小
+> （§13.5 的 8.3% 在 DP 链 setup 宽散布下）。待决策：
+> (a) DP 链 setup 重收数据再测（失败样本 2-3×）；(b) 按判据回到
+> empirical study。fb 加权受 outcome 上界约束，暂不投入。
+
 **原 READY 五阶段计划（v1.0 §5）**：Phase 0/1 已执行（§14），
 Phase 2-4 废弃（修复路线已关）。
 

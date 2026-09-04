@@ -782,3 +782,68 @@ B) 轻量 recovery policy（从 43 失败态 + oracle 轨迹训练）；C) 分�
 
 （复现：`ready_poc.py`（五臂）；补充探针脚本内嵌会话记录；
 `termdiv_{grasp_lift_ext,lift_carry}.json`。）
+
+## 15. 第十轮（2026-09-04：Downstream-Compatible Skill Learning 主实验 —— No-Go 判读）
+
+按 docs/paper_plan_READY.md v2.0 §5 执行主实验（grasp→lift 第一轮验证）。
+代码审查先行：修复 5 个 bug/缺口（norm 数据路径指向不存在的 results/data、
+one-hot 维度 eye(2) vs n_skills=5、chunk 跨轨迹边界拼接、fb 加权无管线、
+下游 lift 用了候选模型而非冻结模型——违反「下游冻结」设计），并新增
+评估种子与收集区间不相交（留出集）与逐回合 rows 记录（供配对检验），
+commits fb55eff/后续。
+
+### 15.1 数据（`dc_collect.py`）
+
+脚本 reach(30) + 冻结 DP grasp(30) 自然轨迹 240 条，每条带冻结 lift×10
+outcome 标签 y + grasp 质量标签 + 完整动作轨迹（7200 steps）。
+**y pos rate = 0.970**（全败轨迹 6 条）——脚本 setup 下劣质抓取天然发生率仅
+~3%（§13.5 的 8.3% 是在 DP 链 setup 更宽散布下测得的）。
+
+### 15.2 主结果（`dc_eval.py`，120 回合/模型，种子 5000 起，下游 lift 冻结）
+
+| 模型 | P(grasp) | P(lift\|grasp) | e2e | grip 均值±std |
+|---|---|---|---|---|
+| base（冻结） | 1.000 | 0.9525 | 0.9525 | 0.4333±0.0255 |
+| uniform 对照（等权微调） | 1.000 | 0.9558 | 0.9558 | 0.4352±0.0264 |
+| outcome λ=1 | 1.000 | 0.9600 | 0.9600 | 0.4353±0.0253 |
+| outcome λ=2 | 1.000 | 0.9600 | 0.9600 | 0.4350±0.0263 |
+| **outcome λ=4** | 1.000 | **0.9683** | **0.9683** | 0.4362±0.0231 |
+| quality λ=2（对照基线） | 1.000 | 0.9600 | 0.9600 | 0.4350±0.0262 |
+
+（复现：`run_dc.sh`；`dc_eval.json` 含逐回合 rows；两轮独立跑结果逐位一致，
+协议确定性确认。）
+
+### 15.3 配对检验（`analyze_dc.py`，同种子配对）
+
+| 变体 vs base | Wilcoxon(lift_p) | McNemar(e2e 二值) | KS(grip 分布) |
+|---|---|---|---|
+| uniform | p=0.367 | 2-2, p=1.0 | **p=0.0002** |
+| outcome λ=1 | p=0.208 | 2-1, p=1.0 | p=0.0045 |
+| outcome λ=2 | p=0.290 | 2-1, p=1.0 | p=0.0002 |
+| outcome λ=4 | p=0.168 | 3-1, p=1.0 | p=0.0011 |
+| quality λ=2 | p=0.290 | 2-1, p=1.0 | p=0.0017 |
+
+三个发现：
+1. **e2e/lift 提升未达显著**：Δe2e=+0.0158（λ=4，SE≈0.0194），McNemar
+   3-1（p=1.0）——方向性为正且随 λ 单调，但 n=120 下无统计显著性；
+2. **终态分布确实被塑造**：所有微调变体的 grip 分布相对 base 显著偏移
+   （KS p<0.005），均值 0.433→0.435-0.436（朝 §13.5 良好区间上缘）；
+3. quality 加权与 outcome 同效（0.960）——本对上下游可行性信号与 grasp
+   自身质量高度相关（§13.5 已证 grip 单特征即可分离劣质态），两者区分度
+   需要更大的失败样本才可见。
+
+### 15.4 Go/No-Go 判读（按 §5 判据）：NO-GO（未达显著）
+
+outcome 加权使 P(e2e) 上升 +1.6pp（未显著）且 P(grasp) 无下降——严格按
+判据（「显著上升」）此路第一轮价值有限。**根因是信号质量**：脚本 reach
+setup 下劣质抓取天然发生率仅 ~3%，outcome 加权的可分配质量小；§13.5 的
+8.3% 劣质率在 DP 链 setup（更宽散布）下才出现。
+
+后续选项（待决策）：
+- (a) DP 链 setup 重收数据（失败样本 ~2-3×）再测 outcome 加权——一次
+  收集 ~30 分钟，是性价比最高的再验证；
+- (b) 按判据回到「现象+检测」empirical study（§11-§14 资产已完整）；
+- fb 连续加权（正式方法）受 outcome 上界约束，outcome 未过判据前不再投入。
+
+（复现：`dc_collect.py`/`dc_train.py`/`dc_eval.py`/`analyze_dc.py`；
+`dc_grasp_lift.h5`、`dc_eval.json`。）
